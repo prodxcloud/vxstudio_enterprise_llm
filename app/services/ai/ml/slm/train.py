@@ -1,11 +1,10 @@
 """
-SupportLLM training — VxSupport v1.0
-=====================================
-Wrapper around the main VxStudioEnterpriseLLM training loop, pointed at the
-SupportLLM dataset folder.
+SLM training entrypoint.
 
-QUICK START (from repo root):
-    python -m app.services.ai.ml.supportllm.train --num-train-epochs 1
+Wraps the shared training loop, pointed at this template's single corpus.
+
+USAGE (from repo root):
+    python -m app.services.ai.ml.slm.train --num-train-epochs 1
 """
 
 from __future__ import annotations
@@ -19,12 +18,12 @@ except ImportError:
     from app.services.ai.ml.train import TrainConfig, LLM_MODEL_NAME, train
 
 
-DEFAULT_DATASET_DIR = Path("app") / "data" / "datasets" / "supportllm"
-DEFAULT_OUTPUT_DIR = Path("app") / "data" / "models" / "supportllm"
+DEFAULT_DATASET_DIR = Path("app") / "data" / "datasets" / "slm"
+DEFAULT_OUTPUT_DIR = Path("app") / "data" / "models" / "slm"
 
 
 def parse_args() -> TrainConfig:
-    parser = argparse.ArgumentParser(description="Fine-tune VxSupport (SupportLLM)")
+    parser = argparse.ArgumentParser(description="Fine-tune the SLM template on the corpus at app/data/datasets/slm/")
     parser.add_argument("--dataset", type=str, default=str(DEFAULT_DATASET_DIR))
     parser.add_argument(
         "--dataset-dir",
@@ -33,11 +32,12 @@ def parse_args() -> TrainConfig:
         const="",
         default=str(DEFAULT_DATASET_DIR),
     )
-    parser.add_argument("--primary-csv", type=str, default="supportllm.csv")
+    parser.add_argument("--primary-csv", type=str, default="corpus.csv")
     parser.add_argument(
         "--file-types",
         type=str,
-        default="csv,json,txt,pdf,sql,xlsx,xls",
+        default="csv,json,txt",
+        help="Comma-separated file extensions the trainer will read from dataset-dir",
     )
     parser.add_argument("--model-name-or-path", type=str, default=LLM_MODEL_NAME)
     parser.add_argument("--output-dir", type=str, default=str(DEFAULT_OUTPUT_DIR))
@@ -76,7 +76,7 @@ def parse_args() -> TrainConfig:
 
 def main() -> None:
     cfg = parse_args()
-    print(f"[SupportLLM] training -> {cfg.output_dir}")
+    print(f"[SLM] training -> {cfg.output_dir}")
     train(cfg)
 
 
