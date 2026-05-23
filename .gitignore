@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Generated / trained artifacts (NEVER commit — rebuilt by AUTO_TRAIN / AUTO_PRECOMPUTE)
+app/data/models/
+app/data/precompute/
+*.pkl
+*.bin
+*.index
+
+# Seed datasets (app/data/datasets/) are intentionally TRACKED — they're the
+# corpus the auto-train pipeline indexes on first run. Do not ignore *.csv globally.
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+app/logs/
+
+# OS
+.DS_Store
+Thumbs.db

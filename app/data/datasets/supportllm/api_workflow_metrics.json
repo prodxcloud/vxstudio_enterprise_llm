@@ -1,0 +1,49 @@
+[
+  {
+    "task": "api_usage",
+    "prompt": "How does the workflow engine work? How do I run a custom DAG?",
+    "category": "api",
+    "sources": [
+      {"title": "POST /api/v2/workflow/*", "url": "internal://services/workflow/executor.go"}
+    ],
+    "output": "Diagnosis: the workflow engine is a Go-native, in-process DAG executor. Nodes are typed handlers (trigger, action, condition, loop, integration, cloud-resource). The frontend's ReactFlow canvas serialises to a JSON `{nodes, edges}` document that you can also POST directly.\n\nSteps:\n  1. Register a workflow: `POST /api/v2/workflow/create -d '{\"name\":\"deploy-on-push\",\"nodes\":[…],\"edges\":[…]}'`.\n  2. Common node types (executor keys):\n     - Triggers: `http_trigger`, `schedule_trigger`, `file_trigger`, `database_trigger`\n     - Actions: `api_call`, `database_query`, `bash_script`, `python_script`, `ssh`, `deploy`, `docker`, `terraform_exec`\n     - Logic: `condition`, `loop`, `transform`, `filter`\n     - Cloud: `ec2`, `s3`, `lambda`, `rds`, `eks`, `vpc`, `route53`, `cloudfront`\n     - Integration: `slack`, `discord`, `email`, `github`, `webhook`\n  3. Trigger manually: `POST /api/v2/workflow/run -d '{\"workflow_id\":\"…\",\"inputs\":{…}}'`.\n  4. Get run status: `GET /api/v2/workflow/runs/<run_id>` — per-node state and outputs.\n  5. SSE stream of executions: `GET /api/v2/workflow/runs/<run_id>/stream`.\n  6. Live HCL preview from a canvas: the frontend uses `useTerraformGenerator.ts` which maps node labels to TF resources — same mapping the backend uses.\n\nVerify: a test `http_trigger → bash_script → slack` workflow run produces a run record with `status:\"completed\"` and the Slack channel got the message.\n\nEscalate: node `deploy` failing with `vault: not found` means the workflow's runtime context lacks credentials — either pass them in the trigger payload or configure the workflow to inherit a workspace's Vault. For long-running scripts (>30 min), use the async `ssh` handler which streams logs back via the run's event log instead of holding the connection. Source: [workflow executor](internal://services/workflow/executor.go)."
+  },
+  {
+    "task": "api_usage",
+    "prompt": "How do I get observability data — metrics and logs — from my deployments?",
+    "category": "api",
+    "sources": [
+      {"title": "Observability routes", "url": "internal://services/observability"}
+    ],
+    "output": "Diagnosis: the observability service registers under `/api/v2/tenant/observability/*` at startup. It aggregates per-resource metrics (CPU, memory, network, disk) by polling cloud APIs and exposes them on a uniform schema; logs are tailed via SSE/WebSocket per resource.\n\nSteps:\n  1. List monitored resources: `GET /api/v2/tenant/observability/resources` — every session-tracked resource with its metric stream id.\n  2. Pull metrics: `GET /api/v2/tenant/observability/metrics?resource_id=…&metric=cpu&from=2026-04-30T10:00Z&to=2026-04-30T12:00Z` — datapoints array.\n  3. Live tail logs (SSE): `curl -N $NODE/api/v2/tenant/observability/logs?resource_id=…` — newline-delimited events.\n  4. Live tail logs (WebSocket): `wss://$NODE/api/v2/tenant/observability/logs/ws?resource_id=…` (used by the dashboard panel).\n  5. Audit feed (separate from observability): `GET /api/v2/audit/events` — every API call against the node, paginated, with optional `WS /api/v2/audit/stream` for live tailing.\n\nVerify: CloudWatch (or Azure Monitor / Cloud Monitoring) shows the same datapoints for the same window.\n\nEscalate: gaps in metric data — the source cloud agent (CloudWatch agent, Ops Agent) isn't installed. Run `vxcli install cloudwatch-agent --host …` (or the equivalent). Logs SSE drops every 60 s — likely a load balancer idle-timeout; either increase the LB timeout or use the WebSocket variant with auto-reconnect. Source: [observability routes](internal://services/observability)."
+  },
+  {
+    "task": "api_usage",
+    "prompt": "How do I open a remote shell on a VM or a kubectl exec via the API?",
+    "category": "api",
+    "sources": [
+      {"title": "Terminal + kubectl exec routes", "url": "internal://services/terminal"}
+    ],
+    "output": "Diagnosis: the node exposes browser-friendly WebSocket endpoints that proxy to either an SSH session on a VM or a `kubectl exec` on a pod. Used by the dashboard's terminal panel; you can hit them directly with `wscat`/`websocat`.\n\nSteps:\n  1. SSH WebSocket: `wss://$NODE/api/v2/tenant/terminal/ssh?host=3.91.20.94&user=ubuntu&key_pair_name=AWSPRODKEY1` — authenticate with `X-API-Key` in the WS handshake.\n  2. Kubectl exec: `wss://$NODE/api/v2/tenant/kubernetes/exec?cluster_id=eks-prod&namespace=app&pod=api-7b…&container=api`.\n  3. Kubectl on a node host: `wss://$NODE/api/v2/tenant/kubernetes/node-shell?cluster_id=…&node=ip-10-0-1-12.ec2.internal`.\n  4. Live logs: `wss://$NODE/api/v2/tenant/kubernetes/cluster/logs/ws?cluster_id=…&namespace=…&pod=…&container=…&follow=true`.\n  5. File transfer (SCP-equivalent): `POST /api/v2/tenant/files/upload` and `GET /api/v2/tenant/files/download` (under filesmanagement service).\n  6. CLI shortcut: `vxcli node ssh --host … --user … --key-pair-name …` opens a local terminal bridged to the same WS.\n\nVerify: `websocat wss://$NODE/api/v2/tenant/terminal/ssh?host=…` after auth gives you an interactive prompt.\n\nEscalate: WebSocket immediately closes with code 1006 — the SSH key pair name resolves but the actual key doesn't match the EC2 key — re-check fingerprints. kubectl exec returns `error: unable to upgrade connection` — the cluster's API server doesn't allow the node's egress IP; add it to the EKS public access CIDRs or run the node inside the VPC. Source: [terminal + kubectl exec routes](internal://services/terminal)."
+  },
+  {
+    "task": "api_usage",
+    "prompt": "What is the universal `/v1/ask` endpoint on the supportllm server? When should I use it instead of `/v1/support/generate`?",
+    "category": "api",
+    "sources": [
+      {"title": "Universal route", "url": "internal://app/services/ai/ml/universal.py"},
+      {"title": "supportllm routes", "url": "internal://app/services/ai/ml/supportllm/routes.py"}
+    ],
+    "output": "Diagnosis: `/v1/ask` is the auto-classifier — it inspects the prompt and routes to the most appropriate specialist (`cloudllm`, `codingllm`, `supportllm`, `thinkingllm`). `/v1/support/generate` is the explicit route — useful when you already know the prompt is a support question and don't want classifier latency.\n\nSteps:\n  1. Auto-route: `POST /v1/ask -d '{\"prompt\":\"How do I reset my MFA device?\"}'` — response includes `routed_to:\"supportllm\"` and the answer.\n  2. Explicit support: `POST /v1/support/generate -d '{\"prompt\":\"How do I request VPN access?\"}'` — skips the classifier.\n  3. Ticket-style: `POST /v1/support/ticket -d '{\"title\":\"…\",\"body\":\"…\",\"reporter\":\"alice\",\"labels\":[\"slack\"]}'` — formats the input as a Jira ticket.\n  4. Runbook lookup: `POST /v1/support/runbook -d '{\"incident\":\"…\",\"service\":\"…\",\"severity\":\"low\"}'`.\n  5. Health check: `GET /v1/support/health` — returns the absolute paths the backend is using (model_path, dataset_dir, precompute_dir) and `model_loaded` status.\n  6. The hard rules baked into the system prompt force `Diagnosis → Steps → Verify → Escalate` formatting.\n\nVerify: a support-style question via `/v1/ask` returns `routed_to:\"supportllm\"`. `/v1/support/health` includes a `model_loaded:true` line after training.\n\nEscalate: `/v1/ask` mis-routes a prompt? You can override per call with `?prefer=supportllm`. Persistent mis-routing means the classifier needs more training data — add labelled examples to `app/data/datasets/cloudllm` / `codingllm` to teach it the boundaries. Source: [universal router](internal://app/services/ai/ml/universal.py)."
+  },
+  {
+    "task": "api_usage",
+    "prompt": "How do I check the health of every service on my tenant node?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "GET /api/v2/health", "url": "internal://main.go"},
+      {"title": "Test-connection endpoints", "url": "internal://main.go"}
+    ],
+    "output": "Diagnosis: the node has three layers of health: (1) public `/api/v2/health` for liveness, (2) per-service `test-connection` endpoints that prove credentials work, (3) downstream service probes (Vault, va_infinity_ai, va_llm_v1). Use them in this order to localise a failure.\n\nSteps:\n  1. Liveness (no auth): `curl $NODE/api/v2/health` — expects `{status:\"ok\"}`.\n  2. Public node overview (used by the monitoring page): `GET /api/v2/dashboard/overview` — CPU, memory, disk, request count.\n  3. Per-stack test-connection (need API key):\n     - `POST /api/v1/infrastructure/services/{nextjs|fastapi|reactjs|nodejs|python|django|golang|rust|cpp|php}/test-connection -d '{\"host\":\"…\",\"ssh_user\":\"…\",\"key_pair_name\":\"…\"}'`\n     - SSL: `POST /api/v1/infrastructure/services/ssl/test-connection`\n     - VPN: `POST /api/v1/infrastructure/services/vpn/test-connection`\n  4. AI/Vault deps: `vxcli doctor` (CLI) or read the startup banner — it prints the live state of `va_infinity_ai` (8741), Vault, and developer-key cache.\n  5. Audit the request: every API call gets a request id; `journalctl -u va_provisioner | grep <req-id>` traces it.\n\nVerify: liveness 200, dashboard overview returns recent metrics, test-connection for a known-good host returns `success:true`.\n\nEscalate: liveness OK but every protected route returns 503 — Vault unreachable. Restart vault-agent and the provisioner. va_infinity_ai unavailable is non-blocking; only AI-dependent routes (chat, agent) will fail. Source: health + test-connection endpoints."
+  }
+]

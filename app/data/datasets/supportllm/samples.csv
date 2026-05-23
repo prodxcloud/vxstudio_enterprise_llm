@@ -1,0 +1,25 @@
+"task","prompt","category","sources","output"
+"docs_qa","How do I reset my password?","identity","[{""title"":""Password Reset"",""url"":""https://confluence.acme/pw""}]","Diagnosis: self-service password reset is enabled for all employees via Okta.
+Steps:
+  1. Go to acme.okta.com -> Sign in help -> Forgot password.
+  2. Enter your corp email.
+  3. Verify via SMS or Okta Verify.
+  4. Set a new 16+ char password (no reuse of last 10).
+Verify: sign in with the new password.
+Escalate: if SMS not received, ping #it-help with your employee ID. Source: [Password Reset](https://confluence.acme/pw)."
+"ticket_answer","GH-2212: 'Github Actions runner is out of disk.'","infra","[{""title"":""Self-hosted runner ops"",""url"":""https://confluence.acme/runner""}]","Diagnosis: the self-hosted runner cache fills when CI doesn't prune Docker layers.
+Steps:
+  1. ssh runner-01
+  2. sudo docker system prune -af --volumes
+  3. sudo journalctl --vacuum-size=500M
+  4. confirm disk usage: df -h /
+Verify: next workflow run succeeds within 2 min.
+Escalate: if disk fills again within 24h, raise the runner root volume by 20 GB. Source: [Self-hosted runner ops](https://confluence.acme/runner)."
+"runbook","How to install Docker Desktop on macOS with corp settings?","tooling","[{""title"":""macOS onboarding"",""url"":""https://confluence.acme/mac""}]","Diagnosis: macOS laptops ship with an MDM profile that allows Docker Desktop only when installed from the corp tap.
+Steps:
+  1. brew install --cask --appdir=/Applications docker
+  2. Open Docker Desktop -> Preferences -> Resources -> set 4 CPUs / 8 GB.
+  3. Turn off 'Send usage statistics'.
+  4. Sign into the corp Docker Hub org.
+Verify: docker run hello-world completes.
+Escalate: if Docker complains about kernel extensions, MDM may need to push the latest profile -- ping #it-help. Source: [macOS onboarding](https://confluence.acme/mac)."

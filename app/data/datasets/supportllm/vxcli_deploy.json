@@ -1,0 +1,68 @@
+[
+  {
+    "task": "vxcli",
+    "prompt": "How do I deploy an EC2 instance on AWS with vxcli?",
+    "category": "vm",
+    "sources": [
+      {"title": "vxcli deploy", "url": "internal://services/cli/cmd/deploy.go"}
+    ],
+    "output": "Diagnosis: `vxcli deploy --service ec2` is the canonical path for EC2. The CLI generates Terraform, ships it to your tenant node, runs `terraform apply`, and persists state in the session — the AWS credentials are pulled from Vault (uploaded earlier via `/api/v2/setup/aws-credentials`).\n\nSteps:\n  1. Pre-req: AWS creds in Vault. Run once: `curl -X POST $NODE/api/v2/setup/aws-credentials -H \"X-API-Key: $KEY\" -d '{\"access_key\":\"…\",\"secret_key\":\"…\",\"region\":\"us-east-1\"}'`.\n  2. Deploy: `vxcli deploy --app webserver --cloud aws --service ec2 --region us-east-1 --instance-type t3.small --volume-size 30 --port 80`.\n  3. Watch progress: the CLI streams Terraform plan + apply. On success it prints the EC2 instance id and public IP.\n  4. Inspect: `vxcli sessions list` shows the session; `vxcli sessions show <id>` prints all created resources.\n  5. Tear down: `vxcli delete <session-id>` (or the API `POST /api/v2/tenant/provision/destroy`).\n\nVerify: `aws ec2 describe-instances --instance-ids <id>` returns `running`, and `curl -I http://<public-ip>:80` returns 200 once your bootstrap script finishes.\n\nEscalate: if the apply fails with `UnauthorizedOperation`, the Vault-stored AWS user lacks `ec2:RunInstances`/`ec2:CreateTags` — attach AmazonEC2FullAccess (or a tighter custom policy) and retry. If it fails on `InvalidKeyPair.NotFound`, no SSH key is bound — pre-create with `vxcli deploy --service security --resource-type keypair --app mykey`. Source: [vxcli deploy](internal://services/cli/cmd/deploy.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "vxcli deploy keeps timing out at the Terraform plan stage. What do I check?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "Terraform plan timeout", "url": "internal://services/filesmanagement"}
+    ],
+    "output": "Diagnosis: `terraform plan` runs on the tenant node. A timeout usually means (a) the AWS/Azure/GCP API is rate-limiting credential lookups, (b) the provisioner is OOM, or (c) the plan is wedged on a state lock from a prior interrupted run.\n\nSteps:\n  1. Re-run with verbose: `vxcli deploy --app x --cloud aws --service ec2 --debug --verbose 2>plan.log` — captures the full Terraform stream.\n  2. Check for state lock: SSH to the node and `ls /var/lib/va_provisioner/sessions/<session-id>/.terraform.tfstate.lock.info`. If present, an old run died; remove it: `terraform -chdir=… force-unlock <lock-id>`.\n  3. Check rate limits: `journalctl -u va_provisioner -n 500 | grep -i throttl` — AWS will say `Throttling: Rate exceeded`. Wait 60s, retry.\n  4. Memory: `free -m` on the node — the provisioner spikes during plan; if <512 MiB free, the host needs a bigger instance type.\n  5. Force-fresh state: `vxcli sessions show <id>` then `vxcli delete <id>` and re-run `vxcli deploy` to start clean.\n\nVerify: re-running `vxcli deploy` reaches the apply phase within 30-60s for a single-resource module.\n\nEscalate: if the plan succeeds locally (`terraform plan` on your laptop with the same vars) but fails on the node, version skew between your local TF and the node's TF is likely. Pin the provisioner's TF version with `--terraform-version 1.7.5`. Source: filesmanagement service handles per-session terraform invocations."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I deploy a Next.js app to a VM I already have running?",
+    "category": "deploy",
+    "sources": [
+      {"title": "vxcli deploy nextjs", "url": "internal://services/cli/cmd/deploy.go"},
+      {"title": "POST /api/v1/infrastructure/services/nextjs/deploy", "url": "internal://main.go"}
+    ],
+    "output": "Diagnosis: `vxcli deploy nextjs` is the existing-VM path. It clones (or scp-uploads) your repo to the target host, installs Node 20, runs `npm ci && npm run build`, configures pm2 + nginx, and binds a port — without provisioning a new VM.\n\nSteps:\n  1. Pre-req: the VM is reachable over SSH and the SSH key pair name is registered in Vault — run `curl -X POST $NODE/api/v2/setup/vm-credentials -H \"X-API-Key: $KEY\" -d '{\"key_pair_name\":\"AWSPRODKEY1\",\"private_key\":\"…\"}'` once.\n  2. Run: `vxcli deploy nextjs --app myfront --host 3.91.20.94 --ssh-user ubuntu --key-pair-name AWSPRODKEY1 --git-url https://github.com/me/myfront --git-branch main --port 3000`.\n  3. The CLI streams the install + build + pm2 start logs.\n  4. Test the deploy without applying: `vxcli deploy nextjs … --test` runs the install script in `--check` mode (no service start).\n  5. Configure nginx + Let's Encrypt: pass `--domain example.com --email ops@example.com` — the script invokes certbot.\n\nVerify: `curl -I http://<host>:3000` returns 200, and `ssh ubuntu@<host> pm2 ls` shows `myfront` online.\n\nEscalate: build failure on `npm ci` is almost always (a) Node version mismatch (use `--node-version 20`) or (b) native deps missing on the VM (the script auto-installs `build-essential`, but ARM AMIs need `apt update` first — pass `--apt-update`). Source: [POST /api/v1/infrastructure/services/nextjs/deploy](internal://main.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "What's the difference between `vxcli vm` and `vxcli deploy --service ec2`?",
+    "category": "cli",
+    "sources": [
+      {"title": "vxcli vm vs deploy", "url": "internal://services/cli/cmd/vm.go"}
+    ],
+    "output": "Diagnosis: `vxcli vm` is a thin convenience wrapper around `vxcli deploy --service vm` with sane defaults; `vxcli deploy --service ec2` is the full surface. They route to the same handler but expose different flag sets.\n\nSteps:\n  1. `vxcli vm --app web --cloud aws` — minimal flags: app, cloud, region, env. Defaults to `t2.micro`, 30 GB volume, port 80.\n  2. `vxcli deploy --app web --cloud aws --service ec2 --instance-type t3.medium --volume-size 100 --port 8080 --auto-scale --replicas 3` — everything is overridable.\n  3. Use `vxcli vm` for throwaway dev VMs.\n  4. Use `vxcli deploy --service ec2` for anything you'll keep — auto-scale, custom IAM, replicas, large volumes.\n  5. Both write the same session record, so `vxcli sessions show <id>` is identical.\n\nVerify: `vxcli sessions show <id>` shows resource type `aws_instance` regardless of which command you used.\n\nEscalate: a hidden footgun — `vxcli vm --cloud valtunox` actually routes to InstaNodeBox (port 8744), not EC2. If you wanted Valtunox-managed compute, use `vxcli instanodebox` to be explicit. Source: [vxcli vm](internal://services/cli/cmd/vm.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I provision an EKS cluster end-to-end with vxcli?",
+    "category": "kubernetes",
+    "sources": [
+      {"title": "vxcli kubernetes", "url": "internal://services/cli/cmd/networks.go"},
+      {"title": "POST /api/v2/tenant/provision/kubernetescluster/deploy", "url": "internal://main.go"}
+    ],
+    "output": "Diagnosis: EKS deployment is a 3-step cascade: VPC → cluster → node group. `vxcli deploy --service kubernetes` runs all three from a single command if you don't already have a VPC, or attaches to an existing one if you pass `--vpc-id`.\n\nSteps:\n  1. AWS creds in Vault (one-time): `POST /api/v2/setup/aws-credentials`.\n  2. Single-shot: `vxcli deploy --app prod-cluster --cloud aws --service kubernetes --region us-east-1 --instance-type t3.medium --replicas 2`.\n  3. Watch the stream — Terraform creates VPC, EKS, and a managed node group. Total time: 10-15 min on AWS.\n  4. Pull kubeconfig: `vxcli kubernetes --app prod-cluster --action kubeconfig > ~/.kube/config-prod` (or via API `GET /api/v2/tenant/kubernetes/cluster/details`).\n  5. Verify: `kubectl --kubeconfig ~/.kube/config-prod get nodes` shows your nodes Ready.\n  6. Apply manifests via API: `POST /api/v2/tenant/kubernetes/cluster/apply-manifest` with `{cluster_id, manifest_yaml}`.\n\nVerify: `vxcli sessions show <id>` lists `aws_eks_cluster`, `aws_eks_node_group`, and `aws_vpc`. `kubectl get pods -A` returns the kube-system pods.\n\nEscalate: if the node group fails with `InsufficientInstanceCapacity`, AWS has no spare t3.medium in your AZ — retry with `--instance-type t3.small` or pass `--az us-east-1c` to avoid the saturated zone. If `kubectl` returns `Unauthorized`, your IAM user isn't in the cluster's aws-auth ConfigMap; patch via `POST /api/v2/tenant/kubernetes/cluster/apply-manifest`. Source: [POST /api/v2/tenant/provision/kubernetescluster/deploy](internal://main.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I deploy a serverless function (AWS Lambda) with vxcli?",
+    "category": "serverless",
+    "sources": [
+      {"title": "vxcli serverless", "url": "internal://services/cli/cmd/deploy.go"},
+      {"title": "POST /api/v2/tenant/provision/serverless", "url": "internal://main.go"}
+    ],
+    "output": "Diagnosis: `vxcli deploy --service serverless` packages a local directory, uploads it via `/api/v2/tenant/provision/upload`, and invokes the serverless handler which generates Terraform for `aws_lambda_function` (or `azurerm_function_app` / `google_cloudfunctions_function`).\n\nSteps:\n  1. Layout your function: `./handler.py` (or `index.js`), `./requirements.txt` (or `package.json`).\n  2. Stage in a session: `vxcli init && cp -r ../my-fn/* src/`.\n  3. Deploy: `vxcli deploy --app billing-fn --cloud aws --service serverless --region us-east-1 --resource-type lambda --port 0` (port is unused for Lambda).\n  4. Function URL is printed at the end; or fetch later: `vxcli sessions show <id> | jq '.outputs.function_url'`.\n  5. Update on code change: re-run the same deploy command — the CLI re-uploads and the handler runs `terraform apply` which detects the source-hash change.\n\nVerify: `aws lambda invoke --function-name billing-fn /tmp/out.json && cat /tmp/out.json` returns your handler's response.\n\nEscalate: if the function 502s with `Module not found`, the upload missed your `node_modules` / `site-packages` — add them to the package or use a Lambda layer. Pass `--no-bundle` to skip vxcli's bundler if you're using Serverless Framework or SAM. Source: [POST /api/v2/tenant/provision/serverless](internal://main.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "Can I preview a deployment before actually creating resources?",
+    "category": "cli",
+    "sources": [
+      {"title": "--dry-run flag", "url": "internal://services/cli/cmd/deploy.go"}
+    ],
+    "output": "Diagnosis: every `vxcli deploy` accepts `--dry-run`. The CLI generates Terraform, ships it to the node, runs `terraform plan`, and returns the planned actions without applying. No cloud resources are created and you're not billed.\n\nSteps:\n  1. `vxcli deploy --app webserver --cloud aws --service ec2 --instance-type t3.small --dry-run --output json > plan.json`.\n  2. Read the plan: `jq '.actions[] | {action, resource}' plan.json` — each entry is `create`/`update`/`destroy`.\n  3. If something looks wrong, adjust flags and rerun `--dry-run` until happy.\n  4. Apply: re-run the same command without `--dry-run`. The session id stays the same so the second invocation is a no-op if nothing changed.\n  5. For pure terraform, `vxcli apply --session_id <id>` honours the same plan/apply split; `--dry-run` runs `terraform plan` only.\n\nVerify: AWS console shows zero new resources after `--dry-run`; `vxcli sessions show <id>` lists no `created_resources`.\n\nEscalate: if `--dry-run` itself errors with `provider config not loaded`, the Vault credentials for the requested cloud are missing — upload via `/api/v2/setup/<cloud>-credentials` first. Source: [vxcli deploy --dry-run](internal://services/cli/cmd/deploy.go)."
+  }
+]

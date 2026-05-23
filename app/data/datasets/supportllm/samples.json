@@ -1,0 +1,204 @@
+[
+  {
+    "task": "getting_started",
+    "prompt": "I just signed up on prodxcloud.io. How do I get started?",
+    "category": "onboarding",
+    "sources": [
+      {"title": "Getting Started", "url": "https://prodxcloud.io/docs/getting-started"},
+      {"title": "Register", "url": "https://prodxcloud.io/auth/register"}
+    ],
+    "output": "Diagnosis: first-time users must register → complete profile → pick a subscription plan before premium features (Studio, Workflow, Dashboard) unlock.\n\nSteps:\n  1. Go to https://prodxcloud.io/auth/register and create your account. Google OAuth is fastest.\n  2. You'll be redirected to `/auth/complete-profile` — fill in name, company, use case.\n  3. Pick a plan at `/auth/subscription`. Options: developer, pro, business, custom, enterprise.\n  4. On checkout success you'll land at `/dashboard`. From there, open `/features/studio` to launch the cloud IDE.\n  5. In Studio, click \"New Workspace\" → pick a runtime (React, FastAPI, or HTML) → give it a name. A session ID is auto-generated.\n\nVerify: when `/dashboard` shows your plan badge (e.g. \"Pro\") and `/features/studio` no longer shows the subscription gate, you're set up.\n\nEscalate: if the Google OAuth popup returns to `/auth/login` with no session, clear cookies for prodxcloud.io and retry — the access token wasn't persisted. If the issue persists, contact support with the request ID from the URL. Sources: [Getting Started](https://prodxcloud.io/docs/getting-started), [Register](https://prodxcloud.io/auth/register)."
+  },
+  {
+    "task": "deploy",
+    "prompt": "How do I run the prodxcloud frontend locally for development?",
+    "category": "local_dev",
+    "sources": [
+      {"title": "Frontend README", "url": "https://github.com/prodxcloud/va_frontend_ui"}
+    ],
+    "output": "Diagnosis: the frontend is a Next.js 14 app (`package.json` → `name: prodxcoud`). It runs on port 3000 in dev and uses Nginx on port 80 in the Docker image.\n\nSteps:\n  1. `git clone` the repo and `cd va_frontend_ui`.\n  2. Install Node 20+ and run `npm ci`.\n  3. Copy `.env.example` to `.env.local` and set at least `NEXT_PUBLIC_INFINITY_API_URL` (backend base URL).\n  4. `npm run dev` → opens http://localhost:3000. Hot reload is on.\n  5. To mirror production, run `npm run build && npm start` or `docker build -t prodxcloud-frontend . && docker run -p 8080:80 prodxcloud-frontend`.\n\nVerify: the landing page loads at localhost:3000, and `/auth/login` shows the Google OAuth button. Network tab should show calls to your configured API URL.\n\nEscalate: if `npm ci` fails on native modules (commonly `@xterm/xterm` or `sharp`), delete `node_modules` + `package-lock.json` and retry with `npm install`. If you see CORS errors from the backend, the API URL is wrong — double-check `.env.local`. Source: [Frontend README](https://github.com/prodxcloud/va_frontend_ui)."
+  },
+  {
+    "task": "deploy",
+    "prompt": "How do I deploy the frontend to a VM using the valtunox deploy script?",
+    "category": "deploy",
+    "sources": [
+      {"title": "deploy_frontend_vm.sh", "url": "https://github.com/prodxcloud/va_frontend_ui/blob/main/deploy_frontend_vm.sh"}
+    ],
+    "output": "Diagnosis: `deploy_frontend_vm.sh` builds a Docker image, pushes to Docker Hub under the `valtunox` org, then SSH-deploys to the target VM and wires up Let's Encrypt for `valtunox-ai.com`.\n\nSteps:\n  1. Ensure env is set: `DOCKER_USERNAME=valtunox`, `DOCKER_REGISTRY=docker.io`, `SSL_DOMAIN=valtunox-ai.com`, `LETSENCRYPT_EMAIL=ops@valtunox-ai.com`, and `TARGET_VM_IP` (default 34.235.125.179).\n  2. `docker login -u valtunox`.\n  3. Make sure SSH is configured: `ssh ubuntu@$TARGET_VM_IP` must succeed without a password (key-based).\n  4. Run `./deploy_frontend_vm.sh`. It tags `valtunox/prodxcloud-frontend:latest`, pushes, then on the VM runs `docker compose pull && docker compose up -d` and invokes certbot.\n  5. Watch the script output — on success the last line reads \"Deployment complete\".\n\nVerify: `curl -I https://valtunox-ai.com` returns 200 and the cert CN matches. SSH to the VM and run `docker ps` — you should see the frontend container bound to :443.\n\nEscalate: if certbot fails with \"acme: Error 403\", port 80 isn't reachable — check the security group. If the Docker push 401s, refresh `docker login`. Source: [deploy_frontend_vm.sh](https://github.com/prodxcloud/va_frontend_ui/blob/main/deploy_frontend_vm.sh)."
+  },
+  {
+    "task": "deploy",
+    "prompt": "How do I deploy the static build to S3 + CloudFront?",
+    "category": "deploy",
+    "sources": [
+      {"title": "deploy_frontend_s3.sh", "url": "https://github.com/prodxcloud/va_frontend_ui/blob/main/deploy_frontend_s3.sh"}
+    ],
+    "output": "Diagnosis: `deploy_frontend_s3.sh` runs `next build && next export` (output in `out/`), syncs to an S3 bucket, and invalidates the CloudFront distribution in front of it.\n\nSteps:\n  1. Set AWS creds: `export AWS_PROFILE=prodxcloud` and confirm with `aws sts get-caller-identity`.\n  2. Set the script's env: `S3_BUCKET=prodxcloud-frontend-prod`, `CLOUDFRONT_DISTRIBUTION_ID=EXXXXXXXX`.\n  3. Ensure the app is export-safe (no server-only routes without `dynamic = 'force-static'`).\n  4. `./deploy_frontend_s3.sh`. It runs `npm run build`, copies `out/` to s3://$S3_BUCKET with `--delete`, then issues a CloudFront invalidation of `/*`.\n  5. Wait ~60 seconds for the invalidation.\n\nVerify: `curl -I https://<cloudfront-domain>/` returns 200 with `x-cache: Hit from cloudfront` after the second request. Hard-reload the site in a browser and confirm the build hash changed.\n\nEscalate: if the sync returns \"AccessDenied\", your IAM role is missing `s3:PutObject` + `s3:DeleteObject` on the bucket. If invalidation hangs > 5 min, check CloudFront console for a conflicting deployment. Source: [deploy_frontend_s3.sh](https://github.com/prodxcloud/va_frontend_ui/blob/main/deploy_frontend_s3.sh)."
+  },
+  {
+    "task": "billing",
+    "prompt": "What plans are available on prodxcloud and what does each include?",
+    "category": "billing",
+    "sources": [
+      {"title": "Pricing", "url": "https://prodxcloud.io/pricing"},
+      {"title": "SubscriptionGate source", "url": "internal://app/components/auth/SubscriptionGate.tsx"}
+    ],
+    "output": "Diagnosis: prodxcloud has five subscription tiers (`developer`, `pro`, `business`, `custom`, `enterprise`) and five compute-node tiers (NANO, MICRO, STANDARD, PRO, POWER) purchased separately at `/billing/nodes/purchase`.\n\nSteps:\n  1. Subscription plans (flat monthly):\n     - `developer` — Studio + basic Dashboard access.\n     - `pro` — unlocks Workflow and multi-workspace Studio.\n     - `business` — team features, audit logs, SSO.\n     - `custom` — priced on-demand (sales).\n     - `enterprise` — dedicated tenancy, SLA, SOC2 artefacts.\n  2. Compute nodes (per month, added on top of subscription):\n     - NANO $19: 1 GB RAM · 1 vCPU · 20 GB SSD — starter\n     - MICRO $29: 4 GB · 2 vCPU · 80 GB — default coding node\n     - STANDARD $49: 8 GB · 4 vCPU · 160 GB — default LLM node\n     - PRO $89: 16 GB · 8 vCPU · 320 GB NVMe — power workloads\n     - POWER $149: 32 GB · 16 vCPU · 640 GB NVMe — enterprise\n  3. Change plan at `/auth/subscription`; buy nodes at `/billing/nodes/purchase`.\n  4. Payment methods: Stripe (cards) and Bitcoin — the BTC flow shows a 30-second wallet countdown at checkout.\n  5. Coupons are accepted on the review step.\n\nVerify: after checkout, `/dashboard` shows your plan badge and the purchased node appears under My Nodes. Invoices land in your email within ~2 minutes.\n\nEscalate: if the plan badge doesn't flip after a successful Stripe charge, hard-refresh and wait up to 5 min (the webhook retries). If still inactive, open a support ticket with the Stripe `pi_...` payment intent ID. Sources: [Pricing](https://prodxcloud.io/pricing), SubscriptionGate component."
+  },
+  {
+    "task": "billing",
+    "prompt": "My Stripe payment succeeded but prodxcloud still shows my plan as inactive.",
+    "category": "billing",
+    "sources": [
+      {"title": "Stripe webhook troubleshooting", "url": "https://prodxcloud.io/docs/billing/webhooks"}
+    ],
+    "output": "Diagnosis: plan activation is driven by the Stripe `invoice.paid` webhook. If Stripe fired it before our backend was reachable, or the tenant ID in the payment metadata was wrong, activation stalls while Stripe retries.\n\nSteps:\n  1. Go to `/billing/history` and confirm the charge is listed as `succeeded` with the right tenant ID.\n  2. In Stripe Dashboard → Developers → Webhooks, find the latest `invoice.paid` event and check the Delivery status. A red X = retrying.\n  3. Sign out and sign back in — this forces a fresh subscription fetch from `/api/v1/auth/me`.\n  4. If still inactive after 10 min, copy the Stripe `pi_...` payment intent ID from the invoice.\n  5. Email support@valtunox.com with (a) the payment intent ID, (b) your tenant ID, (c) the expected plan. We reconcile manually.\n\nVerify: `/dashboard` shows the correct plan badge; `/features/studio` loads past the subscription gate; audit log entry \"subscription activated\" appears.\n\nEscalate: if the Stripe webhook shows \"signature verification failed\", that's on our side — post in `#billing-support` on our Discord and we'll rotate the signing secret. Source: [Billing webhooks docs](https://prodxcloud.io/docs/billing/webhooks)."
+  },
+  {
+    "task": "billing",
+    "prompt": "How do I pay with Bitcoin for a node on prodxcloud?",
+    "category": "billing",
+    "sources": [
+      {"title": "Node purchase page", "url": "internal://app/billing/nodes/purchase/page.tsx"}
+    ],
+    "output": "Diagnosis: the node-purchase flow accepts Bitcoin at the Payment step. It displays a BTC address and a 30-second countdown for each quote to lock the exchange rate.\n\nSteps:\n  1. Open `/billing/nodes/purchase`.\n  2. Step 1 (Hardware): pick NANO / MICRO / STANDARD / PRO / POWER.\n  3. Step 2 (Purpose): pick \"Coding\", \"LLM\", or \"General\".\n  4. Step 3 (Payment): select Bitcoin. A QR code and a one-time deposit address appear with a 30-second ticker.\n  5. Send exactly the shown BTC amount before the ticker expires. The page polls the mempool and auto-advances on 1 confirmation.\n  6. Step 4 (Review): confirm.\n  7. Step 5 (Provisioning): the node is provisioned; you'll see progress 0 → 100%.\n\nVerify: the purchase appears under My Nodes with status `active`. An invoice is emailed.\n\nEscalate: if the countdown expires before your send, DO NOT resend — cancel, request a new quote, and pay the new address. Mis-sent BTC to an expired quote cannot be auto-matched; email support@valtunox.com with the TX hash and we'll refund or credit within 2 business days. Source: [Node purchase flow](internal://app/billing/nodes/purchase/page.tsx)."
+  },
+  {
+    "task": "studio",
+    "prompt": "I opened Studio and it says \"Invalid studio session\". What does this mean?",
+    "category": "studio",
+    "sources": [
+      {"title": "Studio session ID rules", "url": "internal://app/features/studio/utils/studioSessionId.ts"}
+    ],
+    "output": "Diagnosis: session IDs in the URL query string (`?session=...`) must be at least 16 characters, using only letters, numbers, `.`, `_`, or `-`. The validator in `utils/studioSessionId.ts` rejects anything else with the message you saw.\n\nSteps:\n  1. Go back to the Studio landing page at `/features/studio` (no query string).\n  2. Pick an existing workspace from the list — opening it appends a valid session ID to the URL automatically.\n  3. Or click \"New Workspace\": the app generates a 32-hex-char session ID via `generateStudioSessionId()`.\n  4. If you were sharing a link, confirm the `session=` value is intact (Slack sometimes truncates or appends \"…\").\n\nVerify: the page transitions from \"Invalid studio session\" to the Studio Shell (file tree left, editor center, console right).\n\nEscalate: if \"New Workspace\" still fails with invalid session, your browser may be blocking `crypto.getRandomValues` (rare, older iOS WebKit). Try Chrome or Firefox. Source: [studioSessionId.ts](internal://app/features/studio/utils/studioSessionId.ts)."
+  },
+  {
+    "task": "studio",
+    "prompt": "My Studio dev server won't start — the console just shows \"connected: false\".",
+    "category": "studio",
+    "sources": [
+      {"title": "Dev server SSE endpoints", "url": "internal://studio.go#HandleDevServerReady"}
+    ],
+    "output": "Diagnosis: \"connected: false\" means the SSE EventSource connected to `/api/v2/studio/devserver/logs` hasn't received the first `data:` event. Most common causes: the runtime-bootstrap step failed, or the backend can't reach your storage path.\n\nSteps:\n  1. Open the browser Network tab, filter EventStream. Look for `/api/v2/studio/devserver/ready?storage_path=...` — it should return `200` with periodic `event: status` messages.\n  2. If `ready` returns 404, the workspace wasn't bootstrapped. Click \"Restart Dev Server\" in the status bar, or from the backend call `POST /api/v2/studio/bootstrap`.\n  3. If `ready` streams `status: starting` for > 60s, check the build logs stream: `/api/v2/studio/devserver/logs?storage_path=...&stream=build`. Common failures: missing deps (`npm ci` crashed), wrong runtime (selected FastAPI but pushed React code), or port already in use.\n  4. Click \"Stop\" then \"Restart\" in the Studio status bar — this calls `/devserver/stop` then `/devserver/restart`, which reinitialises the container.\n\nVerify: the console panel flips to `connected: true` and logs start streaming (green dot in the status bar).\n\nEscalate: if restart doesn't help, click \"Export Project\" in the menu (downloads a ZIP of frontend+backend) — that confirms your code is safe — then open a ticket at support@valtunox.com with the session ID and the last 50 lines from the build log. Source: studio.go HandleDevServerReady + HandleDevServerLogs handlers."
+  },
+  {
+    "task": "studio",
+    "prompt": "How do I push my Studio project to my own GitHub repo?",
+    "category": "studio",
+    "sources": [
+      {"title": "StudioGit component", "url": "internal://app/features/studio/components/StudioGit.tsx"}
+    ],
+    "output": "Diagnosis: Studio supports pushing to any HTTPS Git remote (GitHub, GitLab, Bitbucket). The flow uses stored Git credentials for the current provider; the actual push goes through `POST /api/v2/studio/git/push` and optionally `POST /api/v2/studio/git/pr` to open a PR.\n\nSteps:\n  1. Open the Studio Git tab (side panel).\n  2. Click \"Connect GitHub\" (or GitLab / Bitbucket). You'll complete OAuth and Studio stores a per-provider credential.\n  3. Pick or create a repo in the Push Repo Browser. Private repos are supported.\n  4. Enter a commit message. Studio auto-proposes a branch name of the form `feat/<slugged-prompt-or-summary>` (see `toBranchName` in StudioGit.tsx).\n  5. Click \"Push\". The toolbar shows progress; on success you get a repo URL + branch.\n  6. Optional: click \"Create PR\" — opens a PR/MR against `main` with the generated branch.\n\nVerify: the repo shows a new commit on the expected branch; clicking \"Open PR\" brings up the GitHub UI with the commit listed.\n\nEscalate: if push 403s with \"authentication failed\", your stored credential expired (GitHub fine-grained tokens = 90 days max). Re-click \"Connect GitHub\" to refresh. If the PR endpoint returns 422 \"no commits between\", you pushed to `main` directly — push to a feature branch first. Source: [StudioGit.tsx](internal://app/features/studio/components/StudioGit.tsx)."
+  },
+  {
+    "task": "studio",
+    "prompt": "I made visual changes in the preview (clicked elements and changed colors), but my code doesn't update. Why?",
+    "category": "studio",
+    "sources": [
+      {"title": "Visual Edit bridge + sync", "url": "internal://app/features/studio/utils/visualEditSync.ts"}
+    ],
+    "output": "Diagnosis: Visual edits flow through a postMessage bridge (`__va_visual_edit_bridge.js` injected into your preview). Changes stay client-side until you click \"Apply to Source\" — that's when `syncVisualChangesToSource()` rewrites files on disk.\n\nSteps:\n  1. In the Visual Edit panel, confirm the badge next to the element shows \"pending N change(s)\".\n  2. Click \"Apply to Source\". A summary panel lists which files will be touched and which changes couldn't be mapped.\n  3. Unmapped changes (e.g. a style applied via a dynamically-generated class) stay pending. The panel shows them with a yellow dot — fix those by editing the source directly.\n  4. If \"Apply\" is greyed out, the bridge hasn't reported `bridgeReady` — reload the preview pane and make sure the iframe is same-origin.\n\nVerify: file explorer shows the edited file with a modified dot; the code editor scrolls to the change; the preview hot-reloads with the new style.\n\nEscalate: if \"Apply\" throws \"allMapped: false\" for more than half your changes, you're probably using a CSS-in-JS lib that rewrites classnames. Switch that component to a plain className literal or inline style while iterating visually. Source: [visualEditSync.ts](internal://app/features/studio/utils/visualEditSync.ts)."
+  },
+  {
+    "task": "studio",
+    "prompt": "How do I connect a custom domain to my Studio project?",
+    "category": "studio",
+    "sources": [
+      {"title": "DNSModal + Production panel", "url": "internal://app/features/studio/components/DNSModal.tsx"}
+    ],
+    "output": "Diagnosis: custom domains are configured via the DNS Modal in Studio. Once DNS is valid, the Production Status Panel shows the domain as live and issues a TLS cert via Let's Encrypt.\n\nSteps:\n  1. In Studio, click \"Publish\" → \"Custom Domain\". The DNS Modal opens.\n  2. Enter your domain (e.g. `app.example.com`). The modal shows the required DNS record: `CNAME app.example.com → <your-subdomain>.prodxcloud.app`.\n  3. Add the CNAME in your DNS provider. TTL 300s is fine.\n  4. Click \"Verify\" in the modal. It polls until propagation is detected (usually 1–5 minutes).\n  5. Once verified, the Production Status Panel flips the status badge to `live` and the padlock appears once the cert is issued (Let's Encrypt, typically < 60s).\n\nVerify: `curl -I https://app.example.com` returns 200 and the cert CN matches. The Production panel shows \"Published by <you>\" with a recent timestamp.\n\nEscalate: if \"Verify\" stays red > 30 minutes, your CNAME is probably pointing to the wrong subdomain. Double-check the value in the modal — each workspace gets its own. If the cert never issues, check that port 80 on your CNAME is reachable (HTTP-01 challenge). Sources: [DNSModal](internal://app/features/studio/components/DNSModal.tsx), [ProductionStatusPanel](internal://app/features/studio/components/ProductionStatusPanel.tsx)."
+  },
+  {
+    "task": "studio",
+    "prompt": "I edited a big file in Studio and got an error about a destructive edit.",
+    "category": "studio",
+    "sources": [
+      {"title": "WriteStudioFile guard", "url": "internal://studio.go#WriteStudioFile"}
+    ],
+    "output": "Diagnosis: `WriteStudioFile` guards against accidental wipes — if your new content is less than 20% of the existing file size (`minEditRatio = 0.2`) AND the file is more than 20 non-empty characters (`minNonEmptyChars = 20`), it rejects unless you pass `allow_destructive: true`.\n\nSteps:\n  1. Confirm you actually intended to shrink the file. If yes, re-send the write with `\"allow_destructive\": true` in the JSON body.\n  2. If the shrink was accidental (e.g. an LLM returned only a snippet), diff against git history — the file is still on disk as it was.\n  3. The AI agent flow does this automatically: when you tell the agent \"rewrite / wipe / reset\" in the prompt, it sets `allow_destructive: true` under the hood.\n  4. For single-line edits, prefer the Monaco editor directly — it's always allowed.\n\nVerify: the save succeeds and the dev server HMR-reloads (unless `skip_reload: true`).\n\nEscalate: if you can't recover the original file and you hadn't committed, check the workspace `.history/` folder (every save is versioned) or ask support to pull the last auto-backup. Source: studio.go WriteStudioFile handler."
+  },
+  {
+    "task": "auth",
+    "prompt": "Google sign-in redirects me back to the login page without signing me in.",
+    "category": "auth",
+    "sources": [
+      {"title": "OAuth callback", "url": "internal://app/auth/oauth/callback/page.tsx"}
+    ],
+    "output": "Diagnosis: the OAuth callback (`/auth/oauth/callback`) reads the access token from URL params, hash, or cookies and stores it. If none of those carry the token, you land on `/auth/login` with an empty session.\n\nSteps:\n  1. Clear prodxcloud.io cookies (Chrome: DevTools → Application → Cookies → clear site data).\n  2. Retry sign-in. Watch the URL during the round-trip — on the callback you should briefly see `?access_token=...&refresh_token=...` or `#access_token=...`.\n  3. If the popup shows \"Secured by Valtunox\" but doesn't close, allow popups for prodxcloud.io.\n  4. If your email isn't in the Google allowlist for a Business/Enterprise org, sign-in completes but `complete-profile` rejects you — contact your admin.\n\nVerify: after the redirect, `/dashboard` loads without bouncing back to `/auth/login`. DevTools → Application → Cookies shows `accessToken` set.\n\nEscalate: if the callback URL shows `error=access_denied`, you cancelled the consent screen — retry. If it shows `error=invalid_state`, our CSRF state expired — wait a minute and retry. Persistent failures: email support@valtunox.com with a HAR file of the sign-in round-trip. Source: OAuth callback page."
+  },
+  {
+    "task": "auth",
+    "prompt": "\"Active subscription required to view audit logs\" — how do I get access?",
+    "category": "auth",
+    "sources": [
+      {"title": "Audit.tsx subscription gate", "url": "internal://app/components/audit/Audit.tsx"}
+    ],
+    "output": "Diagnosis: audit logs are a paid feature. The subscription gate requires one of `developer`, `pro`, `business`, `custom`, or `enterprise` — AND the subscription status must be `active` (not `trial`) for audit logs specifically.\n\nSteps:\n  1. Open `/auth/subscription` and confirm you have an active plan. If you're on trial, upgrade.\n  2. For team-scoped audit logs, you need `business` or higher — check with your tenant admin.\n  3. After upgrading, sign out and back in to force a fresh `/api/v1/auth/me` fetch.\n  4. If you're on `business+` and still blocked, your tenant admin may have restricted audit-log access by role. Ask them to add you to the \"Auditor\" role in tenant settings.\n\nVerify: `/dashboard/audit` loads the log table (even if empty).\n\nEscalate: if billing confirms active Business but the UI still blocks, clear localStorage for prodxcloud.io (cached RBAC) and retry. Persistent: support@valtunox.com with your tenant ID. Source: Audit.tsx gate."
+  },
+  {
+    "task": "api",
+    "prompt": "How do I call the prodxcloud API from a CI job?",
+    "category": "api",
+    "sources": [
+      {"title": "API reference", "url": "https://prodxcloud.io/docs/api"},
+      {"title": "Developer page", "url": "https://prodxcloud.io/dashboard/developer"}
+    ],
+    "output": "Diagnosis: machine callers use API keys (not the browser session cookie). Keys are created at `/dashboard/developer`, scoped per tenant, and rate-limited by plan.\n\nSteps:\n  1. Go to `/dashboard/developer` → \"Create API Key\". Pick scopes (e.g. `studio:read`, `workflow:write`).\n  2. Copy the key immediately — it is shown only once.\n  3. In your CI, set `PRODXCLOUD_API_KEY` as a masked secret.\n  4. Make requests with `Authorization: Bearer $PRODXCLOUD_API_KEY` against `https://api.prodxcloud.io/v1/...`. Example:\n     ```bash\n     curl -H \"Authorization: Bearer $PRODXCLOUD_API_KEY\" https://api.prodxcloud.io/v1/workflows\n     ```\n  5. Handle 429 rate limits by honouring `Retry-After`. The developer page shows your usage counter; it resets monthly.\n\nVerify: `GET /v1/auth/me` returns your tenant info with status 200.\n\nEscalate: \"API key usage count on this page. Contact support for higher rate limits.\" (quote from the developer page) — email support@valtunox.com with your tenant ID and the throughput you need. Sources: [API reference](https://prodxcloud.io/docs/api), developer page."
+  },
+  {
+    "task": "api",
+    "prompt": "How do I use the Terraform provider for prodxcloud?",
+    "category": "api",
+    "sources": [
+      {"title": "Terraform integration docs", "url": "https://prodxcloud.io/docs/integrations/terraform"}
+    ],
+    "output": "Diagnosis: prodxcloud ships a first-party Terraform provider for programmatic resource provisioning. It wraps the same API your dashboard uses.\n\nSteps:\n  1. Pin the provider in your config:\n     ```hcl\n     terraform {\n       required_providers {\n         prodxcloud = { source = \"prodxcloud/prodxcloud\", version = \"~> 1.0\" }\n       }\n     }\n     provider \"prodxcloud\" { api_key = var.prodxcloud_api_key }\n     ```\n  2. `export TF_VAR_prodxcloud_api_key=$PRODXCLOUD_API_KEY`.\n  3. Define resources, e.g.:\n     ```hcl\n     resource \"prodxcloud_node\" \"coding\" {\n       tier    = \"MICRO\"\n       purpose = \"coding\"\n     }\n     ```\n  4. `terraform init && terraform plan && terraform apply`.\n\nVerify: `terraform state list` shows the resource; `/dashboard/nodes` in the UI shows the same node with status `active`.\n\nEscalate: if `terraform init` can't find the provider, you're on an air-gapped network without public registry access — download the provider binary from our releases page and mirror it via `terraform { ... }` provider_installation block. Source: [Terraform integration](https://prodxcloud.io/docs/integrations/terraform)."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "I get redirected to /auth/login every time I visit /dashboard, even right after signing in.",
+    "category": "auth",
+    "sources": [
+      {"title": "middleware.ts", "url": "internal://middleware.ts"}
+    ],
+    "output": "Diagnosis: `middleware.ts` enforces auth by looking for an `accessToken` cookie. If the cookie is missing, expired, or scoped to the wrong domain, it redirects to `/auth/login?redirect=<path>`. This is the #1 cause of sign-in loops.\n\nSteps:\n  1. After signing in, open DevTools → Application → Cookies for prodxcloud.io and check that `accessToken` exists and isn't expired.\n  2. If it's there but `/dashboard` still redirects, clear site data and sign in again — a stale `refreshToken` can poison the session.\n  3. If your browser blocks third-party cookies aggressively, the Google OAuth pop-up can't set the cookie. Switch to \"allow\" for prodxcloud.io, or use the email/password flow.\n  4. On mobile Safari, enable \"Prevent Cross-Site Tracking: Off\" for the duration of sign-in.\n\nVerify: `/dashboard` loads directly without bouncing; DevTools shows `accessToken` with a sensible expiry.\n\nEscalate: if the cookie is never set even after a clean incognito sign-in, the backend at `NEXT_PUBLIC_INFINITY_API_URL` may be unreachable from the browser. Open a ticket with the request ID from DevTools Network. Source: [middleware.ts](internal://middleware.ts)."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "After I upgraded to Pro, /features/studio still shows the subscription gate.",
+    "category": "studio",
+    "sources": [
+      {"title": "SubscriptionGate", "url": "internal://app/components/auth/SubscriptionGate.tsx"}
+    ],
+    "output": "Diagnosis: `SubscriptionGate` reads `user.subscription.status` and `user.subscription.plan` from the cached auth context. If the client doesn't re-fetch `/api/v1/auth/me` after upgrade, the cached value still says `inactive`.\n\nSteps:\n  1. Click your avatar → Sign Out, then sign back in. This triggers a fresh `/api/v1/auth/me` fetch.\n  2. Check DevTools → Network for the `auth/me` response — `subscription.status` must be `active` and `plan` must be one of `developer|pro|business|custom|enterprise`.\n  3. If `status` is `active` but the gate still blocks, clear `localStorage` for prodxcloud.io and refresh.\n\nVerify: the gate component is removed and the Studio Shell loads.\n\nEscalate: if `auth/me` still returns the old plan > 10 minutes after upgrade, the Stripe webhook didn't fire. Raise a ticket referencing your Stripe `pi_...` ID. Source: SubscriptionGate component."
+  },
+  {
+    "task": "about",
+    "prompt": "What is valtunox and how does it relate to prodxcloud?",
+    "category": "about",
+    "sources": [
+      {"title": "OAuth footer", "url": "internal://app/auth/oauth/callback/page.tsx"},
+      {"title": "deploy_frontend_vm.sh", "url": "internal://deploy_frontend_vm.sh"}
+    ],
+    "output": "Diagnosis: Valtunox is the parent / infrastructure brand behind prodxcloud. You'll see \"Secured by Valtunox\" in the OAuth callback footer; deployment scripts push to the Docker Hub org `valtunox` and use `valtunox-ai.com` for ops domains. Support mail flows through `support@valtunox.com` and `ops@valtunox-ai.com`.\n\nSteps (what this means as a user):\n  1. prodxcloud.io is the product you sign up for and bill against.\n  2. Enterprise paperwork (SOC2 letters, DPAs) is issued under the Valtunox legal entity.\n  3. Incident notifications (status page, email) are sent from the valtunox-ai.com domain — whitelist it.\n  4. API keys created at /dashboard/developer work against api.prodxcloud.io regardless of the brand you see.\n\nVerify: your invoice PDF header reads \"prodxcloud by Valtunox\"; your DNS records for custom domains continue to point to `*.prodxcloud.app` (the Valtunox-operated edge).\n\nEscalate: for legal/security questions (DPA, SOC2, pen-test reports), email legal@valtunox.com. For product/support, support@valtunox.com is faster. Sources: OAuth footer + VM deploy script."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "The Studio preview shows 502 Bad Gateway.",
+    "category": "studio",
+    "sources": [
+      {"title": "Dev server lifecycle", "url": "internal://studio.go#HandleDevServerReady"}
+    ],
+    "output": "Diagnosis: 502 from the preview means the proxy is live but the underlying dev server on your workspace port isn't answering. Three common causes: dev server crashed, its port changed, or bootstrap never finished.\n\nSteps:\n  1. Check the Studio status bar. If it reads \"dev server: stopped\" or \"exited\", click \"Restart\".\n  2. Open the build log tab (tails `/devserver/logs?stream=build`). Look for a Node/Python stack trace at the bottom.\n  3. Specific fixes:\n     - `EADDRINUSE` → port already bound. Click \"Stop\" then \"Restart\" — this releases the port.\n     - `Cannot find module ...` → `npm ci` failed mid-flight. Delete `node_modules` via the File Explorer and restart.\n     - `ModuleNotFoundError` (FastAPI) → add the dep to `requirements.txt` and restart.\n  4. If the logs are empty, the container never booted — call `POST /api/v2/studio/bootstrap` again or click \"Rebuild\" in the menu.\n\nVerify: preview returns 200 (or your app's home page) and the status bar shows \"dev server: ready\".\n\nEscalate: if restart loops between \"starting\" and \"exited\" for 3+ cycles, export the project (menu → Export Project) to keep your code safe and ticket support@valtunox.com with the session ID. Source: HandleDevServerReady in studio.go."
+  },
+  {
+    "task": "deploy",
+    "prompt": "How do I set up SSL / HTTPS for a self-hosted prodxcloud frontend?",
+    "category": "deploy",
+    "sources": [
+      {"title": "nginx config + certbot", "url": "internal://nginx/"}
+    ],
+    "output": "Diagnosis: the Docker image runs Nginx on port 80. For HTTPS, terminate TLS at Nginx using certbot (Let's Encrypt) or at a load balancer / CloudFront in front.\n\nSteps (certbot on a single VM):\n  1. Point your domain A-record to the VM IP.\n  2. Install certbot: `sudo apt-get install -y certbot python3-certbot-nginx`.\n  3. Start the container with host networking or 80/443 published: `docker run -d -p 80:80 -p 443:443 --name prodxcloud-frontend valtunox/prodxcloud-frontend:latest`.\n  4. On the host: `sudo certbot --nginx -d yourdomain.com -m ops@yourdomain.com --agree-tos -n`. Certbot edits Nginx to listen on 443 and auto-redirects :80.\n  5. Add a cron for renewal: `echo '0 3 * * * root certbot renew --quiet' | sudo tee /etc/cron.d/certbot`.\n\nSteps (behind CloudFront / ALB):\n  1. Leave the container on :80.\n  2. Issue an ACM cert for your domain.\n  3. Attach it to CloudFront or the ALB; origin protocol HTTP.\n\nVerify: `curl -I https://yourdomain.com` returns 200 and the cert is valid (SSL Labs grade ≥ A).\n\nEscalate: if certbot fails \"challenge did not pass\", port 80 isn't open to the internet — most common fix is AWS security group or ufw (`sudo ufw allow 80/tcp`). Source: nginx/ directory in the frontend repo."
+  }
+]

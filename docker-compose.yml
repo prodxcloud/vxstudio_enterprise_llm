@@ -1,0 +1,113 @@
+# docker-compose.yml - Updated with Prometheus, Grafana, and Redis
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: va_llm_v1
+    image: ${DOCKER_IMAGE:-vxcloud/va_llm_v1:latest}
+    ports:
+      - "${PORT:-8001}:8001"
+    networks:
+      - api-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - DATABASE_HOST=db.vxcloud.io
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=cloudsystem
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - APOLLO_API_KEY=${APOLLO_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+      # Redis connection (use external or local)
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # Prometheus metrics
+      - PROMETHEUS_ENABLED=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    volumes:
+      - ./app/data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: va_llm_v1_redis
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - api-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Prometheus - Metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: va_llm_v1_prometheus
+    ports:
+      - "9092:9090"
+    networks:
+      - api-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    depends_on:
+      - fastapi
+
+  # Grafana - Metrics visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: va_llm_v1_grafana
+    ports:
+      - "3002:3000"
+    networks:
+      - api-network
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  api-network:
+    driver: bridge

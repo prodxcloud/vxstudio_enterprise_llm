@@ -1,0 +1,416 @@
+================================================================================
+DEVOPS AGENT 1.1 — KNOWLEDGE BASE FOR FINE-TUNING
+================================================================================
+Version: 1.1.0
+Updated: 2026-04-09
+Purpose: Train SLM to classify DevOps intent and generate action JSON payloads.
+
+================================================================================
+SECTION 1: ACTION TYPES
+================================================================================
+
+The DevOps Agent supports 7 action types. Each action is output as a JSON block.
+
+ACTION 1: execute (script or terraform)
+- Runs a bash script on a remote VM via SCP+SSH
+- Runs terraform locally on the server with cloud credentials from vault
+- Fields: action, type (script|terraform), path, args (optional), explanation
+- Example: {"action":"execute","type":"script","path":"redis/install_redis.sh","explanation":"Installing Redis"}
+- Example with args: {"action":"execute","type":"script","path":"network/open_port_scanner.sh","args":"192.168.1.1 1 1024 50","explanation":"Scanning ports"}
+- Example terraform: {"action":"execute","type":"terraform","path":"aws/terraform_aws_s3_bucket","explanation":"Creating S3 bucket"}
+
+ACTION 2: git_clone
+- Clones a git repository into a session directory
+- Fields: action, repo_url, branch, explanation
+- Example: {"action":"git_clone","repo_url":"https://github.com/user/repo.git","branch":"main","explanation":"Cloning repository"}
+
+ACTION 3: write_file
+- Creates or edits a file in the session directory
+- Fields: action, file_path, content, explanation
+- Example: {"action":"write_file","file_path":"Dockerfile","content":"FROM node:20\nWORKDIR /app\nCOPY . .\nCMD [\"node\",\"app.js\"]","explanation":"Creating Dockerfile"}
+
+ACTION 4: git_push
+- Commits and pushes changes to a git branch
+- Fields: action, branch, message, explanation
+- Example: {"action":"git_push","branch":"feat/add-docker","message":"Add Dockerfile","explanation":"Pushing changes"}
+
+ACTION 5: git_pr
+- Creates a pull request on GitHub/GitLab
+- Fields: action, head_branch, base_branch, title, body, explanation
+- Example: {"action":"git_pr","head_branch":"feat/add-docker","base_branch":"main","title":"Add Docker support","body":"Adds Dockerfile and docker-compose","explanation":"Creating PR"}
+
+ACTION 6: execute_cli (vxcli command)
+- ONLY triggered when user explicitly mentions "vxcli" or "vx" in their prompt
+- Generates a vxcli CLI command for the user to execute
+- Fields: action, command, explanation
+- Example: {"action":"execute_cli","command":"vxcli deploy --app myapp --cloud aws --service ec2","explanation":"Deploy to AWS EC2"}
+- Example: {"action":"execute_cli","command":"vxcli auth login -k xc_dev_mykey -u myuser","explanation":"Login to platform"}
+- IMPORTANT: Do NOT generate execute_cli unless the prompt contains "vxcli" or "vx"
+
+ACTION 7: multi_step (chained workflow)
+- Triggered when user describes a multi-step workflow
+- Contains a steps array with 2-5 sequential actions
+- Fields: action, steps (array), explanation
+- Example: {"action":"multi_step","steps":[{"action":"git_clone","repo_url":"...","branch":"main"},{"action":"execute","type":"script","path":"deployments/deploy_dockerized_fastapi.sh"}],"explanation":"Clone and deploy"}
+
+================================================================================
+SECTION 2: SCRIPT CATEGORIES (449 scripts)
+================================================================================
+
+ai/ — AI tools: install_ai_cli, install_hermes, install_opencode
+c++/ — C++ security tools: IDS, monitoring, secure remote desktop
+centos/ — CentOS admin: firewall, nginx, apache, user audit, system update
+cloud/aws/ — AWS CLI: create EC2, EKS, S3, IAM, billing alarms
+cloud/aws/commands/ — AWS provisioning: EC2, RDS, S3, IAM roles
+cloud/azure/ — Azure CLI: create VM, DevOps API, repos
+cloud/gcp/ — GCP CLI: create instances, GKE
+cloud/valtunox/ — Valtunox cloud operations
+debian/ — Debian admin: firewall, nginx, system update
+dev/ — Dev environment: AWS/Azure/GCP/Docker/K8s env setup
+django/ — Django: migrations, backups, restore
+docker/ — Docker: install, cleanup, backup, monitor, health check, images
+git/ — Git: backup, branch manager, commit automation, health check, hooks, release
+golang/ — Go: install, environment setup
+java/ — Java: install JDK/SDK
+jenkins/ — Jenkins: install CI/CD server
+kafka/ — Kafka: install messaging platform
+kali/ — Security testing: forensics, network scan, password crack
+kubernetes/ — K8s: install kubectl, ArgoCD, Istio, dashboard, monitoring
+kvm/ — KVM: create VM, clone, snapshot, migrate, monitor, network
+mailcow/ — Mailcow: install email server
+mailserver/ — Mail server: install and configure
+mysql/ — MySQL/MariaDB: install, manage, backup
+network/ — Network tools: port scanner, DNS check, SSL audit, firewall rules, VPN health, bandwidth test, DDoS detection, SSH audit, traffic analyzer, latency monitor, ARP spoofing detector, certificate expiry monitor
+nextcloud/ — Nextcloud: install file sharing
+openclaw/ — OpenClaw: install, configure, health check, update
+php/ — PHP: install PHP, Laravel, WordPress
+postgres/ — PostgreSQL: install, backup/restore tables/databases, stop, uninstall
+python/ — Python: install, setup environment
+redhat/ — Red Hat: firewall, nginx, apache, user audit
+redis/ — Redis: install, configure, cache management
+storage/ — Storage: disk health, usage analyzer, RAID status, LVM, NFS, S3 analyzer, snapshots, quotas, temp cleaner, swap analyzer
+temporal/ — Temporal: install workflow engine
+terraform/ — Terraform: install, state management, fmt check, module update
+utils/ — Utilities: system cleanup, SSL renewal, OpenSSL, port check/kill, nginx, apache, cloud health check, scheduled reboot, disk alerts
+vault/ — HashiCorp Vault: install, CLI, environment
+vm/ — VM operations: SSH connect, deploy frontend, container deploy, SSL setup, OpenVPN, WireGuard, MetalDB backup/restore
+anythingllm/ — AnythingLLM: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+elk/ — ELK Stack: install Elasticsearch/Logstash/Kibana, Docker, Kubernetes, healthcheck, monitor
+forgejo/ — Forgejo: install git server, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+githubrunner/ — GitHub Runner: install self-hosted CI runner
+gitlabrunner/ — GitLab Runner: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+grafana/ — Grafana: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+mongodb/ — MongoDB: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+nodejs/ — Node.js: install runtime
+ollama/ — Ollama: install local LLM, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+openvpn/ — OpenVPN: install, Docker, Kubernetes, add client, healthcheck, monitor, troubleshoot
+portainer/ — Portainer: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+rocketchat/ — Rocket.Chat: install, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+rustdesk/ — RustDesk: install remote desktop, Docker, Kubernetes, healthcheck, monitor, troubleshoot
+wireguard/ — WireGuard: install VPN, Docker, Kubernetes, add peer, healthcheck, monitor, troubleshoot
+deployments/ — Deployment scripts: deploy_dockerized_fastapi, deploy_dockerized_frontend, deploy_fastapi_git, deploy_frontend_git, provision_containers
+
+================================================================================
+SECTION 3: TERRAFORM MODULES (207 modules across 16 providers)
+================================================================================
+
+AWS (52 modules): EC2, EKS, ECS, RDS, Aurora, S3, Lambda, API Gateway, CloudFront, Route53, VPC, Subnets, Security Groups, Load Balancer, IAM, KMS, CloudTrail, SNS, SQS, SES, EventBridge, Step Functions, DMS, DocumentDB, DynamoDB, Redis, Backup, Cost Reporting, ECR, SSL, VPN, Transit Gateway, DNS, NACL
+
+Azure (21 modules): VM, AKS, SQL, CosmosDB, Functions, App Service, VNet, NSG, Load Balancer, VPN, Key Vault, AD, Blob Storage, Site Recovery, Role Assignments
+
+GCP (21 modules): VM, GKE, Cloud Run, Cloud Functions, Cloud SQL, Firestore, Memorystore, VPC, Subnets, Firewall, Load Balancer, VPN, IAM, Service Accounts, Secret Manager, Cloud Storage, DMS, Backup
+
+Docker (62 modules): Redis, PostgreSQL, MySQL, MongoDB, Nginx, Jenkins, Grafana, Prometheus, Elasticsearch, ELK, Vault, Consul, Portainer, Kafka, RabbitMQ, n8n, Nextcloud, WordPress, Ollama, OpenWebUI, LiteLLM, ChromaDB, Weaviate, Milvus, GitLab Runner, GitHub Runner, Temporal, Mattermost, Rocket.Chat, OpenVPN, WireGuard, RustDesk, and more
+
+Alibaba (5), DigitalOcean (varies), Hetzner, Linode, Vultr, Cloudflare, GoDaddy, UpCloud, Valtunox, VMware
+
+================================================================================
+SECTION 4: SCRIPT ARGUMENT PATTERNS
+================================================================================
+
+Scripts that require arguments:
+- network/open_port_scanner.sh <target> [start_port] [end_port] [threads]
+- network/bandwidth_test.sh <target>
+- network/network_latency_monitor.sh <target>
+- utils/check_port.sh <hostname> <port>
+- utils/kill_port.sh <port>
+- redis/install_redis.sh [--port PORT] [--password PWD] [--max-memory SIZE]
+- postgres/install_postgres.sh [options]
+- docker/run_container.sh <image> [options]
+
+When the user mentions a hostname/IP, use it as the target argument.
+When the user mentions a port number, use it as the port argument.
+
+================================================================================
+SECTION 5: EXECUTION ROUTING
+================================================================================
+
+RULE 1: All terraform modules run LOCALLY on the Go server (terraform talks to cloud APIs).
+RULE 2: All bash scripts run on the REMOTE VM via SCP + SSH.
+RULE 3: Git operations (clone, push, PR) run LOCALLY on the Go server.
+RULE 4: File write operations happen LOCALLY in the session directory.
+RULE 5: Cloud credentials are loaded from vault automatically.
+RULE 6: SSH credentials are loaded from vault using the key_pair_name.
+
+================================================================================
+SECTION 6: MULTI-ACTION WORKFLOWS
+================================================================================
+
+Users can request multi-step workflows. Output max 5 actions in sequence:
+
+Example: "Clone my repo, install Nginx, deploy the site"
+1. {"action":"git_clone","repo_url":"...","branch":"main","explanation":"Cloning repo"}
+2. {"action":"execute","type":"script","path":"utils/install_nginx.sh","explanation":"Installing Nginx"}
+3. {"action":"execute","type":"script","path":"vm/deploy_frontend.sh","explanation":"Deploying site"}
+
+Example: "Set up monitoring with Grafana and Prometheus"
+1. {"action":"execute","type":"terraform","path":"docker/terraform_docker_linux_grafana","explanation":"Deploying Grafana"}
+2. {"action":"execute","type":"terraform","path":"docker/terraform_docker_linux_prometheus","explanation":"Deploying Prometheus"}
+
+Example: "Create a Dockerfile, push to GitHub, create PR"
+1. {"action":"write_file","file_path":"Dockerfile","content":"...","explanation":"Creating Dockerfile"}
+2. {"action":"git_push","branch":"feat/add-docker","message":"Add Dockerfile","explanation":"Pushing"}
+3. {"action":"git_pr","head_branch":"feat/add-docker","base_branch":"main","title":"Add Docker","body":"...","explanation":"Creating PR"}
+
+================================================================================
+SECTION 7: DESTRUCTIVE ACTIONS (require confirmation)
+================================================================================
+
+These actions are flagged as destructive and require user confirmation:
+- reboot, shutdown (server)
+- remove_file, kill_port
+- Any script with "destroy", "delete", "remove", "uninstall" in the path
+- terraform destroy operations
+
+================================================================================
+SECTION 8: INTENT CLASSIFICATION
+================================================================================
+
+The SLM should classify user prompts into these intents:
+- execute_script: User wants to run a bash script
+- execute_terraform: User wants to provision infrastructure via terraform
+- git_clone: User wants to clone a repository
+- git_push: User wants to commit and push code
+- git_pr: User wants to create a pull request
+- write_file: User wants to create or edit a file
+- system_check: User wants to scan/check their server (ports, disk, RAM)
+- deploy_service: User wants to deploy a service (FastAPI, React, Next.js, Django, static site)
+- deploy_container: User wants to deploy a Docker container
+- deploy_kubernetes: User wants to deploy to a Kubernetes cluster
+- deploy_agent: User wants to deploy an AI agent
+- setup_cicd: User wants to set up CI/CD pipeline (GitHub Actions, Jenkins, GitLab CI, Gitea, Forgejo)
+- run_ansible: User wants to run an Ansible playbook
+- pipeline_operation: User wants to manage CI/CD pipelines (create, trigger, pause, resume, view logs)
+- setup_webhook: User wants to configure git webhooks
+- multi_action_workflow: User describes a complex multi-step deployment workflow
+- execute_cli: User explicitly mentions "vxcli" or "vx" — generate a CLI command
+- generate_workflow: User wants to generate a CI/CD workflow (GitHub Actions, GitLab CI)
+- other: General question, not actionable
+
+CRITICAL ROUTING RULE for execute_cli:
+- ONLY classify as execute_cli when the prompt contains "vxcli" or "vx"
+- "deploy my app to AWS" → execute_script or deploy_service (NOT execute_cli)
+- "use vx to deploy my app to AWS" → execute_cli
+- "vxcli deploy --app myapp" → execute_cli
+- This prevents vxcli from cannibalizing script/terraform/deployment intents
+
+Confidence scoring:
+- 0.9+ : Clear, unambiguous request with specific tool/script mentioned
+- 0.7-0.9 : Clear intent but tool needs to be inferred
+- 0.5-0.7 : Ambiguous, may need clarification
+- <0.5 : Not a DevOps request
+
+================================================================================
+SECTION 9: DEPLOYMENT SERVICES
+================================================================================
+
+Supported deployment services (via dedicated endpoints):
+- FastAPI: /api/v1/infrastructure/services/fastapi/deploy (Python API)
+- React: /api/v1/infrastructure/services/reactjs/deploy (JavaScript frontend)
+- Next.js: /api/v1/infrastructure/services/nextjs/deploy (SSR JavaScript)
+- Static Website: /api/v1/infrastructure/services/staticwebsite/deploy (HTML/CSS/JS)
+- Django: /api/v1/infrastructure/services/django/deploy (Python backend)
+- Docker Container: /api/v2/tenant/container/deploy (any Docker image)
+- Kubernetes: /api/v2/tenant/provision/kubernetescluster/deploy (K8s workloads)
+- AI Agent: /api/v2/tenant/deploy/agents (agent deployments with scale/rollback)
+
+================================================================================
+SECTION 10: CI/CD PIPELINE TEMPLATES
+================================================================================
+
+GitHub Actions templates (shared/githubactions/):
+- cpp_cicd_docker_vm: C++ build, Docker, VM, Kubernetes, Agentic workflows
+- golang_cicd_docker_vm: Go build, Docker, VM, Kubernetes, Agentic workflows
+- ml_fastapi_cicd_docker_vm: FastAPI ML, Docker, VM, Kubernetes workflows
+- nextjs_standalone_cicd_docker_vm: Next.js standalone, Docker, VM workflows
+- reactjs_build_cicd_nginx_vm: React build, Nginx, VM deployment workflows
+
+Jenkins templates (shared/jenkins/):
+- cpp_jenkins_template, django_jenkins_template, eks_jenkins_template
+- fastapi_jenkins_template, golang_jenkins_template, nextjs_jenkins_template
+
+GitLab CI templates (shared/gitlab/):
+- use_case_1.yml, use_case_2.yml
+
+Gitea CI templates (shared/gitea/):
+- ai-agent, cpp, golang, nextjs, python, reactjs
+
+Forgejo Actions templates (shared/forgejoactions/):
+- ai-agent, cpp, golang, nextjs, python, reactjs
+
+================================================================================
+SECTION 11: ANSIBLE PLAYBOOKS
+================================================================================
+
+Deployment playbooks (shared/ansible/deployment/):
+- aws/vm/ansible-playbook-ec2.yml: Provision EC2 instances
+- aws/webapp/playbook.yml: Deploy web applications to AWS
+- aws/webapp/wordress-docker.yml: WordPress with Docker
+- portainer/deploy-portainer.yaml: Deploy Portainer
+- traefik/deploy-traefik.yaml: Deploy Traefik reverse proxy
+
+Network playbooks (shared/ansible/network/):
+- network_playbook.yml: Network configuration
+
+================================================================================
+SECTION 12: KUBERNETES MANIFESTS
+================================================================================
+
+Templates (shared/kubernetes/):
+- celery_kubernetes_template: Celery workers, beat scheduler, Flower monitoring
+- cluster_kubernetes_template: Cluster issuer, service accounts, TLS
+- django_kubernetes_template: Django deployment, configmap
+
+================================================================================
+SECTION 13: CI/CD PIPELINE OPERATIONS (API)
+================================================================================
+
+Pipeline CRUD: /api/v2/cicd/pipelines
+- POST: Create pipeline
+- GET: List all pipelines
+- GET /:id: Get pipeline details
+- PUT /:id: Update pipeline
+- DELETE /:id: Delete pipeline
+- POST /:id/trigger: Trigger build
+- POST /:id/pause: Pause pipeline
+- POST /:id/resume: Resume pipeline
+- GET /:id/deployments: List deployments
+- GET /:id/history: Pipeline history
+
+Builds: /api/v2/cicd/builds
+- GET: List builds
+- GET /:id: Build details
+- POST /:id/cancel: Cancel build
+- GET /:id/logs: Stream build logs
+
+Git: /api/v2/cicd/git
+- POST /connect: Connect repository
+- GET /repositories: List connected repos
+- GET /repositories/:id/branches: List branches
+
+Webhooks: /api/v2/cicd/webhooks
+- POST /github: GitHub webhook handler
+- POST /gitlab: GitLab webhook handler
+- POST /bitbucket: Bitbucket webhook handler
+
+Environment Variables: /api/v2/cicd/env
+- GET: List variables
+- POST: Create variable
+- PUT /:varId: Update variable
+- DELETE /:varId: Delete variable
+
+================================================================================
+SECTION 14: VXCLI COMMAND REFERENCE (execute_cli intent)
+================================================================================
+
+TRIGGER RULE: ONLY when prompt contains "vxcli" or "vx" keyword.
+
+vxcli auth login [-k API_KEY] [-u USERNAME] — Login to platform
+vxcli auth logout — Logout
+vxcli auth status — Check auth status
+vxcli auth whoami — Show current user
+vxcli auth validate — Validate API key
+
+vxcli deploy --app NAME --cloud PROVIDER --service SERVICE — Deploy infrastructure
+  Clouds: aws, azure, gcp, valtunox, linode, digitalocean, upcloud
+  Services: ec2, vm, kubernetes, eks, ecs, serverless, lambda, docker, s3, storage, rds, dynamodb, database, vpc, network, loadbalancer, cdn, iam, security, keypair, sns, sqs, webapp, api, microservices, instanodebox
+  Flags: --instance-type, --region, --env, --volume-size, --image, --port, --replicas, --memory, --cpu, --auto-scale, --dry-run
+
+vxcli vm/kubernetes/serverless/storage/network/docker/instanodebox — Quick deploy shortcuts
+
+vxcli sessions list — List deployment sessions
+vxcli sessions show SESSION_ID — Show session details
+vxcli sessions explore SESSION_ID — Interactive session explorer
+
+vxcli status — Platform health check
+vxcli status -c CLOUD -s SERVICE -a APP — Resource status
+
+vxcli apply --session_id SESSION_ID — Apply terraform changes
+vxcli delete --session_id SESSION_ID — Delete/destroy session
+
+vxcli chat [MESSAGE] — AI chat (interactive or one-shot)
+vxcli chat --agent openclaw/research — Chat with specific agent
+vxcli chat --model openai/gpt-4o — Chat with specific model
+
+vxcli agent git --prompt "..." — AI git operations (commit, PR, analysis)
+vxcli agent devops --prompt "..." [--stream] — AI DevOps orchestration
+vxcli agent tools [--agent git|devops] — List available tools
+vxcli agent tool --agent AGENT --tool TOOL — Run single tool
+
+vxcli configure setup [PROVIDER] — Credential wizard (aws, azure, gcp, docker, github, gitlab, vm, database)
+vxcli configure list — Show current settings
+vxcli configure set KEY VALUE — Update setting
+vxcli configure reset — Reset to defaults
+
+vxcli import --session_id SESSION --app REPO_URL — Import git repository
+vxcli pull -c CLOUD -s SERVICE — Discover/sync cloud resources
+vxcli init — Initialize terraform
+vxcli list — List available resources
+vxcli tui — Interactive terminal dashboard
+vxcli doctor — System health check
+vxcli setup — First-time setup wizard
+vxcli version — Show version
+vxcli about — Show info
+
+================================================================================
+SECTION 15: KUBERNETES TEMPLATES (full inventory)
+================================================================================
+
+Templates (shared/kubernetes/):
+- django_kubernetes_template: Django + Gunicorn deployment, Celery workers, Celery Beat
+- fastapi_kubernetes_template: FastAPI + Uvicorn deployment
+- reactjs_kubernetes_template: React frontend deployment
+- python_kubernetes_template: Generic Python app deployment
+- redis_kubernetes_template: Redis cache deployment
+- grafana_kubernetes_template: Grafana monitoring dashboard
+- portainer_kubernetes_template: Portainer container management
+- opentelemetry_kubernetes_template: OpenTelemetry collector
+- flower_kubernetes_template: Flower Celery monitoring
+- celery_kubernetes_template: Celery worker deployment
+- cluster_kubernetes_template: Cluster configuration and TLS
+
+================================================================================
+SECTION 16: WORKFLOW GENERATION (generate_workflow intent)
+================================================================================
+
+The agent can generate CI/CD workflow YAML for:
+
+GitHub Actions:
+- Node.js: checkout → setup node 18 → npm install → npm test → docker build → push
+- Python: checkout → setup python 3.11 → pip install → pytest → docker build → push
+- FastAPI: checkout → setup python → pip install → uvicorn test → docker build → push
+- Go: checkout → setup go 1.22 → go test → go build → docker build → push
+- Docker: checkout → docker build → docker push to registry
+- Kubernetes: checkout → build → kubectl apply
+
+GitLab CI:
+- Same runtimes as GitHub Actions
+- Stages: test → build → deploy
+- Uses GitLab variables for secrets
+
+Workflow templates from codebase:
+- cpp_cicd_docker_vm: C++ with Docker and VM deployment
+- golang_cicd_docker_vm: Go with Docker and VM deployment
+- ml_fastapi_cicd_docker_vm: ML FastAPI with Docker and VM
+- nextjs_standalone_cicd_docker_vm: Next.js standalone
+- reactjs_build_cicd_nginx_vm: React with Nginx and VM

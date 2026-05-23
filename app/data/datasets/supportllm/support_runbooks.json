@@ -1,0 +1,47 @@
+[
+  {
+    "task": "runbook",
+    "prompt": "Production deploy on the tenant node returned 500 — what's the runbook?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "Provisioner logs", "url": "internal://services/applog"}
+    ],
+    "output": "Diagnosis: a 500 from `/api/v2/tenant/provision/*` means the handler reached the panic recovery middleware — usually a Terraform binary error, a Vault read failure, or an unhandled cloud SDK exception. The Gin request id in the response header (`X-Request-ID`) maps to the structured logs.\n\nSteps:\n  1. Capture the request id from the failed response: `curl -i $NODE/... | grep -i x-request-id`.\n  2. SSH to the tenant node host and grep: `journalctl -u va_provisioner -n 1000 --no-pager | grep <request-id>`.\n  3. Read the stack trace — it'll point at one of: `terraform apply failed`, `vault: secret/data/... not found`, or a cloud SDK error (`AccessDenied`, `Throttling`).\n  4. Common fixes:\n     - Vault not found → upload the missing credential via `/api/v2/setup/<provider>-credentials`.\n     - Terraform error → re-run with `--debug` or directly on the node: `cd /var/lib/va_provisioner/sessions/<id> && terraform plan` to see the raw error.\n     - Throttling → wait 60 s and retry.\n  5. If the panic is generic (`runtime error: invalid memory address`), capture the full stack from the logs and include it in the support ticket.\n\nVerify: re-running the same call returns 200; the request id appears once in the logs without `[ERROR]`/`[PANIC]`.\n\nEscalate: panic with no obvious cause + request still failing — restart the provisioner (`systemctl restart va_provisioner`). If a restart fixes it but it returns within an hour, you've hit a goroutine leak; capture `curl localhost:8743/debug/pprof/goroutine?debug=2` and email it to support@valtunox.com. Source: applog component-tagged structured logs."
+  },
+  {
+    "task": "runbook",
+    "prompt": "Vault is down — what still works on the tenant node, and what fails?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "Vault optional config", "url": "internal://config/vault.go"}
+    ],
+    "output": "Diagnosis: Vault is OPTIONAL at boot — the provisioner starts and serves liveness even if Vault is unreachable. But every credential lookup at request time hits Vault, so anything needing AWS/Azure/GCP/SSH/AI keys returns 503 until Vault is back.\n\nSteps:\n  1. Confirm: `curl $NODE/api/v2/health` returns 200 (provisioner is up).\n  2. Probe Vault directly: `curl -sf $VAULT_ADDR/v1/sys/health` — should return 200 + JSON. If it 503s or refuses connection, Vault itself is the problem.\n  3. Common Vault issues:\n     - Sealed: `vault status` shows `Sealed: true`. Run `vault operator unseal` with the keys.\n     - TLS expired: `openssl s_client -connect vault:8200` reports cert error. Renew via certbot or external CA.\n     - Disk full on the Vault host: `df -h` — Vault file backend stops accepting writes when full.\n  4. While Vault is down, what still works:\n     - Liveness, public dashboard overview, audit reads, sessions list.\n     - All `/api/v2/setup/*` endpoints fail (they write to Vault).\n     - All provisioning endpoints fail (they read credentials).\n  5. Recovery: unseal/restart Vault, then `systemctl restart va_provisioner` so it re-establishes the connection pool.\n\nVerify: `vxcli doctor` shows Vault green; a `vxcli deploy --dry-run` reaches the plan stage instead of 503.\n\nEscalate: if you operate Vault yourself and it's repeatedly sealing, switch from file backend to an integrated storage (`raft`) cluster of 3-5 nodes for HA. For managed setups, the runbook is to fail over to a replica region; a forced node redeploy is rarely necessary. Source: [Vault config](internal://config/vault.go)."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "I'm getting 'Invalid API Key' but my key is correct. What's the failure mode?",
+    "category": "auth",
+    "sources": [
+      {"title": "developer.RequireAPIKey", "url": "internal://services/developer"}
+    ],
+    "output": "Diagnosis: `RequireAPIKey` middleware rejects the call if the supplied `X-API-Key` doesn't match the cached value AND can't be re-validated against Vault. Common causes: stale local cache, key rotated in the dashboard, or a tenant mismatch.\n\nSteps:\n  1. Re-check the header you're sending: `curl -v -H \"X-API-Key: $KEY\" $NODE/api/v2/health` (health is public so 200 even with a bad key — confirms reachability).\n  2. Hit a protected route with the same key: `curl -v -H \"X-API-Key: $KEY\" $NODE/api/v2/tenant/services/inventory`. 401 here = the key is genuinely wrong server-side.\n  3. Verify the key is registered: `POST /api/v2/setup/get-api-token -d '{\"workspace\":\"default\"}'` returns the active token name.\n  4. If you rotated the key in the dashboard, the node cache is stale. Restart the provisioner OR call `POST /api/v2/setup/api-token -d '{\"workspace\":\"default\"}'` to refresh.\n  5. Check tenancy: a key from workspace A won't authenticate against a node bound to workspace B — the boot banner shows the active workspace.\n\nVerify: protected route returns 200; the response carries the same `X-Request-ID` you can grep in logs.\n\nEscalate: 401 persists after a refresh — the developer key is genuinely revoked. Re-issue at `/dashboard/api-keys` and run `vxcli auth login -u me -k <new-key>` locally. If the boot banner shows `Developer X-API-Key not loaded`, set `DEVELOPER_API_KEY` env var on the node host as a stopgap. Source: developer.RequireAPIKey + VerifyTenantAPIKeyOnStartup."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "vxcli deploy succeeds but my app isn't reachable on the public IP. How do I debug?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "Security group + port mapping", "url": "internal://services/security"}
+    ],
+    "output": "Diagnosis: an unreachable app after a successful deploy is almost always one of: (1) security group blocks the port, (2) the OS firewall blocks the port, (3) the app bound to 127.0.0.1 instead of 0.0.0.0, (4) the public IP is private (NAT) or got reassigned.\n\nSteps:\n  1. Confirm the IP from the session: `vxcli sessions show <id>` — note `public_ip`.\n  2. Connectivity: `curl -v -m 5 http://<ip>:<port>/`. Timeouts = network blocked. RST = nothing listening. Reset connection = process up but on the wrong interface.\n  3. SSH and check the listener: `ss -tlnp | grep <port>` — should show `0.0.0.0:<port>` (or `[::]:`). If `127.0.0.1:<port>`, your app config binds to localhost — fix the config and restart.\n  4. OS firewall: `sudo ufw status` or `iptables -L -n` — open the port: `sudo ufw allow <port>/tcp`.\n  5. AWS security group: `aws ec2 describe-security-groups --group-ids <sg>` — make sure the port is open to `0.0.0.0/0` (or your allowed CIDR).\n  6. NAT case: if `vxcli sessions show` lists a private-only IP, you provisioned in a private subnet — re-run with `--public` or attach an Elastic IP via `POST /api/v2/connector/attach-eip`.\n\nVerify: `curl http://<ip>:<port>` from your laptop returns 200 (or expected redirect).\n\nEscalate: still unreachable with everything green — check VPC route tables (private subnet without IGW), and NACLs (separate from SGs, often forgotten). For Cloudflare-fronted apps, `curl -H 'Host: yourdomain' <ip>` to bypass DNS. Source: security service + SG generation in connectors."
+  },
+  {
+    "task": "troubleshoot",
+    "prompt": "How do I clean up after a half-finished deploy that left orphaned resources?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "Discovery + destroy", "url": "internal://services/discovery"}
+    ],
+    "output": "Diagnosis: a crashed `terraform apply` can leave AWS resources without a session record — Terraform created them, then died before persisting state. The discovery service finds these orphans; you can either re-import them into a session or destroy them out-of-band.\n\nSteps:\n  1. Discover: `GET /api/v2/tenant/resources/discover/aws/ec2` — look for instances tagged `vxcli-managed=true` but absent from `vxcli sessions list`.\n  2. Cross-check: `vxcli sessions list --output json | jq '[.[] | .resources[].provider_id]' | sort > known.txt` and compare to the discovered list.\n  3. Reclaim option A — import to a new session: `vxcli init recovery && POST /api/v2/tenant/resources/import -d '{\"session_id\":\"recovery\",\"resource_type\":\"aws_instance\",\"resource_id\":\"i-…\"}'` then `vxcli delete recovery` cleanly destroys it.\n  4. Reclaim option B — destroy directly via cloud CLI: `aws ec2 terminate-instances --instance-ids i-…`. Faster but loses the audit trail.\n  5. Repeat for each affected service (s3, rds, eks, lambda).\n  6. Prevention: enable the workflow `cleanup_orphans` recipe — it runs the discover/import/destroy loop on a daily schedule.\n\nVerify: `discover/aws/ec2` no longer lists the orphan; AWS console confirms the instance is `terminated`.\n\nEscalate: if a resource has `DeleteProtection: true` (RDS, ALB, EBS), the destroy step fails — disable protection via console or `aws rds modify-db-instance --no-deletion-protection`, then retry. For S3 buckets with versioned objects, run `aws s3 rm s3://<bucket> --recursive --include '*'` and clear delete markers before `aws s3api delete-bucket`. Source: discovery service + destroy endpoint."
+  }
+]

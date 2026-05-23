@@ -1,0 +1,50 @@
+[
+  {
+    "task": "terraform",
+    "prompt": "Write a Terraform module that creates an AWS VPC with a private subnet, KMS-encrypted flow logs, and a private DNS namespace.",
+    "intent": "iac_terraform",
+    "cloud_provider": "aws",
+    "region": "us-east-1",
+    "output": "provider \"aws\" {\n  region = \"us-east-1\"\n}\n\n# SECURITY: key rotation enabled so compromised keys auto-retire\nresource \"aws_kms_key\" \"logs\" {\n  description             = \"KMS key for VPC flow logs\"\n  deletion_window_in_days = 7\n  enable_key_rotation     = true\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.50.0.0/16\"\n  enable_dns_support   = true\n  enable_dns_hostnames = true\n  tags = { Name = \"prod-vpc\", Environment = \"prod\" }\n}\n\nresource \"aws_subnet\" \"private_a\" {\n  vpc_id                  = aws_vpc.main.id\n  cidr_block              = \"10.50.1.0/24\"\n  availability_zone       = \"us-east-1a\"\n  # SECURITY: never auto-assign a public IP in a private subnet\n  map_public_ip_on_launch = false\n}\n\nresource \"aws_cloudwatch_log_group\" \"vpc_flow\" {\n  name              = \"/vpc/flow-logs\"\n  kms_key_id        = aws_kms_key.logs.arn\n  retention_in_days = 30\n}\n\nresource \"aws_service_discovery_private_dns_namespace\" \"main\" {\n  name = \"svc.prod.internal\"\n  vpc  = aws_vpc.main.id\n}"
+  },
+  {
+    "task": "kubernetes",
+    "prompt": "Write a Kubernetes Deployment for a FastAPI service called orders-api with 3 replicas, resource limits, and a readiness probe.",
+    "intent": "k8s_manifest",
+    "cloud_provider": "any",
+    "region": "",
+    "output": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n  namespace: prod\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-api\n  template:\n    metadata:\n      labels:\n        app: orders-api\n    spec:\n      containers:\n        - name: orders-api\n          image: ghcr.io/acme/orders-api:1.4.2\n          ports:\n            - containerPort: 8000\n          # SECURITY: drop all caps; only run as non-root\n          securityContext:\n            runAsNonRoot: true\n            capabilities:\n              drop: [\"ALL\"]\n          resources:\n            requests:\n              cpu: 100m\n              memory: 256Mi\n            limits:\n              cpu: 500m\n              memory: 512Mi\n          readinessProbe:\n            httpGet: { path: /health, port: 8000 }\n            initialDelaySeconds: 5\n            periodSeconds: 10"
+  },
+  {
+    "task": "ansible",
+    "prompt": "Write an Ansible playbook that hardens an Ubuntu 22.04 host: disable root SSH login, install ufw, and allow only ports 22 and 443.",
+    "intent": "ansible_playbook",
+    "cloud_provider": "any",
+    "region": "",
+    "output": "---\n- name: Harden Ubuntu host\n  hosts: all\n  become: true\n  tasks:\n    - name: Disable root SSH login\n      ansible.builtin.lineinfile:\n        path: /etc/ssh/sshd_config\n        regexp: '^#?PermitRootLogin'\n        line: 'PermitRootLogin no'\n      notify: Restart sshd\n      # SECURITY: root SSH is the #1 brute-force target\n\n    - name: Install ufw\n      ansible.builtin.apt:\n        name: ufw\n        state: present\n        update_cache: true\n\n    - name: Allow SSH and HTTPS\n      community.general.ufw:\n        rule: allow\n        port: \"{{ item }}\"\n        proto: tcp\n      loop: [22, 443]\n\n    - name: Enable ufw\n      community.general.ufw:\n        state: enabled\n        policy: deny\n\n  handlers:\n    - name: Restart sshd\n      ansible.builtin.service: { name: ssh, state: restarted }"
+  },
+  {
+    "task": "runbook",
+    "prompt": "Our EKS cluster is seeing NodeNotReady alerts on 2 of 5 nodes. Give me a prioritized runbook.",
+    "intent": "incident_response",
+    "cloud_provider": "aws",
+    "region": "us-east-1",
+    "output": "Diagnosis:\n  NodeNotReady usually = kubelet can't reach API server or node runs out of disk/memory.\n\nSteps:\n  1. kubectl describe node <node> | grep -A5 Conditions\n     -> Look for DiskPressure, MemoryPressure, PIDPressure.\n  2. aws ssm start-session --target <i-...> ; systemctl status kubelet containerd\n  3. If DiskPressure: docker system prune; journalctl --vacuum-size=500M\n  4. If kubelet Stopped: systemctl restart kubelet ; tail -f /var/log/messages\n  5. Check VPC reachability: curl -k https://<cluster-endpoint>/healthz\n\nVerify:\n  kubectl get nodes -w  (all nodes return Ready within ~3 min)\n\nEscalate:\n  If >1 node still NotReady after step 5, open a Sev-2 to the Platform team and\n  cordon affected nodes so workloads reschedule."
+  },
+  {
+    "task": "cost",
+    "prompt": "Our monthly EC2 bill jumped 40% last week. How do I find the culprit?",
+    "intent": "cost_optimization",
+    "cloud_provider": "aws",
+    "region": "",
+    "output": "Steps:\n  1. Open Cost Explorer -> Group by: SERVICE, filter EC2-Instance. Compare MTD vs previous month.\n  2. Drill in: group by INSTANCE_TYPE and USAGE_TYPE. Spot the spiking family (e.g. m5.4xlarge BoxUsage).\n  3. Use CUR + Athena to list top 20 instances by cost this week:\n     SELECT line_item_resource_id, SUM(line_item_unblended_cost) c\n     FROM cost_and_usage_report\n     WHERE line_item_product_code='AmazonEC2'\n       AND line_item_usage_start_date > date_add('day', -7, current_date)\n     GROUP BY 1 ORDER BY c DESC LIMIT 20;\n  4. For each top instance: check CloudWatch CPU/Mem. If <10% utilized for 7d, right-size or stop.\n  5. Check for NAT Gateway data processing charges ($0.045/GB) — often the hidden 40% spike.\n  6. # SECURITY: before terminating, tag `Owner` and ping #platform-ops in case of prod dependency.\n\nVerify:\n  Cost Explorer daily spend drops within 24h; set a Budgets alert at +10% for next month.\n\nEscalate:\n  If no obvious culprit, file a ticket with AWS Support (Business+) for a cost deep-dive."
+  },
+  {
+    "task": "dockerfile",
+    "prompt": "Write a minimal, production-hardened Dockerfile for a Python 3.12 FastAPI app.",
+    "intent": "iac_terraform",
+    "cloud_provider": "any",
+    "region": "",
+    "output": "# syntax=docker/dockerfile:1.7\nFROM python:3.12-slim AS build\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir --prefix=/install -r requirements.txt\n\nFROM python:3.12-slim\nWORKDIR /app\n# SECURITY: run as a non-root user\nRUN useradd -u 10001 -m appuser\nCOPY --from=build /install /usr/local\nCOPY --chown=appuser:appuser . .\nUSER appuser\nEXPOSE 8000\nHEALTHCHECK --interval=30s --timeout=3s CMD curl -fsS http://127.0.0.1:8000/health || exit 1\nCMD [\"uvicorn\", \"app.app:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]"
+  }
+]

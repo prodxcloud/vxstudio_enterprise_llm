@@ -1,0 +1,48 @@
+[
+  {
+    "task": "vxcli",
+    "prompt": "How do I deploy a marketplace agent like prompt_agent on a VM?",
+    "category": "marketplace",
+    "sources": [
+      {"title": "vxcli marketplace", "url": "internal://services/cli/cmd/marketplace.go"}
+    ],
+    "output": "Diagnosis: marketplace agents are containerised AI agents in the Valtunox catalog. They deploy via SSH bundle: vxcli generates a bundle (Dockerfile + env file), scp's it to the target VM, and `docker run`s it. The agent kind is `agent`; same flow for `model`.\n\nSteps:\n  1. Browse: `vxcli marketplace agent list` — prints all available agents with id, summary, default image.\n  2. Inspect: `vxcli marketplace agent show prompt_agent` — env vars required, exposed port, default model.\n  3. Pre-req: VM SSH key in Vault (`vxcli auth login` + `POST /api/v2/setup/vm-credentials`).\n  4. Deploy:\n     ```\n     vxcli marketplace agent deploy prompt_agent \\\n       --host 13.216.243.13 --ssh-user ubuntu --key-pair-name AWSPRODKEY2 \\\n       --system-prompt \"You are a helpful assistant\" \\\n       --env-vars \"ANTHROPIC_API_KEY=…\\nMODEL=claude-sonnet-4\"\n     ```\n  5. Output: vxcli prints the host:port to hit. The agent runs as `docker run -d --restart=always`.\n\nVerify: `curl -X POST http://<host>:8000/v1/chat -d '{\"message\":\"hi\"}'` returns a model response.\n\nEscalate: if the deploy hangs at `docker pull`, the VM lacks Docker — re-run with `--install-docker` or pre-install via `vxcli install docker --host …`. If the agent crashes immediately, run `ssh ubuntu@host docker logs <container-id>` — usually a missing env var (most agents need at least one provider key). Source: [vxcli marketplace](internal://services/cli/cmd/marketplace.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I provision a Terraform marketplace solution like terraform_aws_documentdb?",
+    "category": "marketplace",
+    "sources": [
+      {"title": "vxcli marketplace solution", "url": "internal://services/cli/cmd/marketplace.go"}
+    ],
+    "output": "Diagnosis: marketplace solutions are prebuilt Terraform modules (provider+region pinned). `vxcli marketplace solution provision` resolves the module, materialises HCL into your session, and runs `terraform apply` on the tenant node — same engine path as `vxcli deploy`.\n\nSteps:\n  1. Browse by provider: `vxcli marketplace solution list --provider aws` (also `--provider gcp`, `--provider azure`, `--provider cloudflare`).\n  2. Inspect: `vxcli marketplace solution show terraform_aws_documentdb` — required vars, outputs, est. cost.\n  3. Init a session if you don't have one: `vxcli init my-docdb`.\n  4. Provision (pass module vars with `--var key=value`, repeatable):\n     ```\n     vxcli marketplace solution provision terraform_aws_documentdb \\\n       --resource-name acme-docdb --region us-east-1 \\\n       --var \"master_username=admin\" \\\n       --var \"instance_class=db.t3.medium\"\n     ```\n  5. Outputs (e.g. cluster endpoint) print on success and are persisted in `session.json`.\n\nVerify: `vxcli sessions show <id> | jq '.outputs'` includes the DocDB endpoint, and `aws docdb describe-db-clusters` shows `available`.\n\nEscalate: provisioning errors at `Error: creating DocDB cluster: InvalidParameterValue` are almost always the master password — it must be 8-100 chars, ASCII printable, no `/@\"` chars. Pass `--var master_password=…` explicitly. If the module isn't found, run `vxcli marketplace solution list` again — the catalog may have renamed it. Source: [vxcli marketplace solution](internal://services/cli/cmd/marketplace.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I install Postgres on a VM with vxcli install?",
+    "category": "install",
+    "sources": [
+      {"title": "vxcli install", "url": "internal://services/cli/cmd/install.go"}
+    ],
+    "output": "Diagnosis: `vxcli install` ships an embedded catalog of 53+ install scripts (Postgres, Redis, Grafana, Prometheus, MongoDB, etc.). Each script is inlined with a shared `lib.sh` and scp'd to the host before running over SSH. Three install modes: baremetal (default), docker, kubernetes.\n\nSteps:\n  1. Browse: `vxcli install list` — full catalog with mode support per service.\n  2. Pre-req: VM key pair name in Vault.\n  3. Baremetal (apt/dnf): `vxcli install postgres --host 3.91.20.94 --ssh-user ubuntu --key-pair-name AWSPRODKEY1`.\n  4. Docker mode: `vxcli install postgres --mode docker --host … --ssh-user ubuntu --key-pair-name AWSPRODKEY1` — runs `docker run -d --restart=always postgres:16`.\n  5. Kubernetes mode (no VM): `vxcli install postgres --mode kubernetes --arg --namespace=db` — applies a Helm chart against your current `kubectl` context.\n  6. Custom args to the underlying script: pass `--arg --port=5433 --arg --version=16` (repeatable).\n\nVerify: `ssh ubuntu@host \"sudo systemctl is-active postgresql\"` returns `active` (baremetal) or `docker ps | grep postgres` shows it running.\n\nEscalate: if scp fails with `Permission denied`, the key pair name resolves to the wrong key in Vault — list with `POST /api/v2/vault/get-vm-credentials` and confirm the fingerprint. If the apt install errors with `Unable to locate package`, the VM lacks the Postgres APT repo — pass `--arg --add-repo=true`. Source: [vxcli install](internal://services/cli/cmd/install.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "I have my own bash installer script. How do I run it on a VM via vxcli?",
+    "category": "install",
+    "sources": [
+      {"title": "vxcli install --script", "url": "internal://services/cli/cmd/install.go"}
+    ],
+    "output": "Diagnosis: `vxcli install --script <path>` SCPs an arbitrary local script to the host and runs it over SSH. Used for one-off installers that aren't (yet) in the catalog. Sister flag: `--compose` for a docker-compose.yml.\n\nSteps:\n  1. Local script: `./bootstrap-myapp.sh` — make it idempotent (`set -euo pipefail` recommended).\n  2. Run: `vxcli install --script ./bootstrap-myapp.sh --host 3.91.20.94 --ssh-user ubuntu --key-pair-name AWSPRODKEY1`.\n  3. Pass args to the script: append `--arg ...` (each `--arg` is one positional or flag). Example: `--arg --domain=example.com --arg --port=8080`.\n  4. Compose flow: `vxcli install --compose ./docker-compose.yml --stack myapi --host …`. Stack name is the prefix used for `docker compose -p`.\n  5. Stream stdout: the CLI tails the remote process; failures return non-zero exit and the last 100 stderr lines.\n\nVerify: SSH to the host and check the artefacts your script was supposed to create (systemd unit, file, port).\n\nEscalate: if your script uses `sudo` and prompts for a password, it'll hang silently. Either (a) ensure the SSH user has NOPASSWD sudo, or (b) prefix every `sudo` with `DEBIAN_FRONTEND=noninteractive` and ensure your sudoers allows it. Source: [vxcli install --script](internal://services/cli/cmd/install.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I deploy a Docker container to an existing VM using vxcli?",
+    "category": "docker",
+    "sources": [
+      {"title": "vxcli deploy container", "url": "internal://services/cli/cmd/deploy_container.go"},
+      {"title": "POST /api/v2/tenant/container/deploy", "url": "internal://main.go"}
+    ],
+    "output": "Diagnosis: `vxcli deploy container` is a one-shot — pull image on the VM, run with the supplied env/ports/volumes, configure `--restart=always`, and (optionally) bind to a host name on the VM's nginx. It does NOT use Terraform.\n\nSteps:\n  1. Image must be public, or the VM has a docker-login (use `POST /api/v2/setup/docker-credentials` once to push registry creds to Vault).\n  2. Run:\n     ```\n     vxcli deploy container \\\n       --app billing-api --image ghcr.io/me/billing-api:1.4.0 \\\n       --host 3.91.20.94 --ssh-user ubuntu --key-pair-name AWSPRODKEY1 \\\n       --port 8080:8080 \\\n       --env DATABASE_URL=postgres://… --env LOG_LEVEL=info\n     ```\n  3. Stop/start/remove later: `POST /api/v2/tenant/container/{stop,start,remove}` with `{container_name: \"billing-api\"}`.\n  4. Status: `POST /api/v2/tenant/docker/container/status` returns a per-container summary (image, ports, uptime).\n  5. Live shell: `GET /api/v2/tenant/docker/container/ws` is a websocket exec — used by the dashboard's terminal panel.\n\nVerify: `curl http://<host>:8080/health` returns 200, and `ssh ubuntu@host docker ps` shows the container with the right ports.\n\nEscalate: pull errors `unauthorized: authentication required` mean the registry creds aren't in Vault — upload them and retry. If the container starts then exits, `docker logs billing-api` over SSH shows the crash; missing env vars are the usual cause. Source: [POST /api/v2/tenant/container/deploy](internal://main.go)."
+  }
+]

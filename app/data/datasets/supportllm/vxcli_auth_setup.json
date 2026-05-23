@@ -1,0 +1,75 @@
+[
+  {
+    "task": "vxcli",
+    "prompt": "I just installed vxcli for the first time. What do I run to get started?",
+    "category": "cli",
+    "sources": [
+      {"title": "vxcli setup", "url": "internal://services/cli/cmd/setup.go"},
+      {"title": "vxcli auth", "url": "internal://services/cli/cmd/auth.go"}
+    ],
+    "output": "Diagnosis: vxcli (aliases vx, vxcloud) is bootstrapped in two phases — `setup` writes config defaults, then `auth login` stores a developer API key. Provisioning commands fail with 401 until both are done.\n\nSteps:\n  1. Run `vxcli setup` — interactive wizard that writes ~/.valtunox/config.json (default cloud, default region, output format).\n  2. Run `vxcli auth login -u <yourname> -k xc_live_...` (API key form). For password sign-in: `vxcli auth login --email you@corp --password ***`.\n  3. Confirm with `vxcli auth status` and `vxcli auth whoami` — both should print your username + workspace + org.\n  4. Run `vxcli doctor` — verifies OS deps, config presence, and reachability of the tenant node API.\n  5. Optional: `vxcli node current` shows the tenant node URL the CLI will hit for provisioning.\n\nVerify: `vxcli sessions list` returns a (possibly empty) list, not 401. `vxcli auth status` prints `authenticated=true`.\n\nEscalate: if `auth login` succeeds but every command 401s, the API key format is correct but server-side validation failed — re-mint the key in the dashboard and try again. If `vxcli doctor` reports `node unreachable`, your default node URL is stale; fix with `vxcli node refresh`. Source: [vxcli auth](internal://services/cli/cmd/auth.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "Where does vxcli store credentials? Is my AWS key safe?",
+    "category": "auth",
+    "sources": [
+      {"title": "vxcli auth credentials", "url": "internal://services/cli/cmd/auth.go"}
+    ],
+    "output": "Diagnosis: vxcli only persists first-party Valtunox developer keys (prefix `xc_dev_`, `xc_live_`, `xc_test_`). Third-party secrets (AWS, GitHub, OpenAI, etc.) never touch the local file — they live in HashiCorp Vault behind the tenant node.\n\nSteps:\n  1. Local file location:\n     - Linux/macOS: `~/.valtunox/credentials.json`\n     - Windows: `%USERPROFILE%\\.valtunox\\credentials.json`\n  2. Inspect contents: `cat ~/.valtunox/credentials.json` — you'll see `{username, api_key, token_name, workspace, org}`. No AWS keys, no SSH keys.\n  3. Cloud provider credentials are uploaded once to Vault via `POST /api/v2/setup/aws-credentials` (and the equivalents for Azure/GCP). They're referenced by name, never embedded in CLI config.\n  4. SSH key pairs are referenced by `--key-pair-name` — vxcli sends only the name, the tenant node resolves the private key from the workspace Vault entry.\n  5. To rotate: `vxcli auth logout` then `vxcli auth login -u … -k <new-key>`.\n\nVerify: `grep -i aws ~/.valtunox/credentials.json` returns nothing. Provisioning still works because the node looks up Vault, not the local file.\n\nEscalate: if you accidentally pasted an AWS key into the local file, delete the file, run `vxcli auth login` again, and rotate the AWS key in IAM. Source: vxcli auth login flow."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "vxcli auth login keeps saying 'invalid API key format'. What's wrong?",
+    "category": "auth",
+    "sources": [
+      {"title": "API key prefixes", "url": "internal://services/cli/cmd/auth.go"}
+    ],
+    "output": "Diagnosis: the CLI rejects keys whose prefix isn't `xc_dev_`, `xc_live_`, or `xc_test_`. Format validation happens client-side before any HTTP call, so a bad prefix never reaches the server.\n\nSteps:\n  1. Print the key (mind your shell history): `echo $VXCLI_KEY | head -c 8` — confirm the prefix.\n  2. If you copied from the Valtunox dashboard, ensure no trailing whitespace: `vxcli auth login -u me -k \"$(echo -n \"$VXCLI_KEY\" | tr -d '[:space:]')\"`.\n  3. If the prefix is right but login still fails with 401 (not format error), the key was revoked or belongs to another tenant — re-issue at `/dashboard/api-keys`.\n  4. To use a non-default token name: append `--token-name mydevkey992` so the local file records which key was used.\n\nVerify: `vxcli auth status` reports `authenticated=true` and shows the same `token_name` you passed.\n\nEscalate: if you must use a third-party key (AWS, GitHub, etc.) for some integration, do NOT shoehorn it into `auth login` — upload it via `POST /api/v2/setup/<provider>-credentials` instead. Source: [vxcli auth](internal://services/cli/cmd/auth.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I switch between two tenant nodes? I have a staging and a prod node.",
+    "category": "cli",
+    "sources": [
+      {"title": "vxcli node", "url": "internal://services/cli/cmd/node.go"}
+    ],
+    "output": "Diagnosis: every provisioning command targets exactly one tenant node, resolved from `~/.valtunox/config.json` after login. The `node` command group lets you list, refresh, and switch nodes without re-authenticating.\n\nSteps:\n  1. `vxcli node list` — prints all nodes registered against your account in the control plane (id, name, URL, status).\n  2. `vxcli node current` — shows which node every subsequent command will hit (e.g. `https://prodxcloud-prod-01.valtunox.space:8743`).\n  3. `vxcli node set-default 12` — switches the default node id. The CLI rewrites `config.json` and refuses ids you don't own.\n  4. `vxcli node refresh` — re-fetches the node list from the Infinity control plane (use after provisioning a new node so the local cache learns about it).\n  5. Per-command override: most commands accept `--node-url https://...` to target a one-off node without changing the default.\n\nVerify: `vxcli node current` reflects the new id, and `vxcli sessions list` returns sessions from the right node.\n\nEscalate: if `node list` is empty but you definitely have nodes, the control plane lookup failed — `vxcli node refresh --debug` will print the HTTP error. A 403 means your developer key doesn't have node-read scope; re-mint with the right scopes. Source: [vxcli node](internal://services/cli/cmd/node.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "What is `vxcli init` for? Do I need to run it before deploying?",
+    "category": "cli",
+    "sources": [
+      {"title": "vxcli init", "url": "internal://services/cli/cmd/init.go"}
+    ],
+    "output": "Diagnosis: `vxcli init` creates a session workspace — a local sandbox that tracks state in `.vxcli/session.json` and binds the directory to the active tenant node. Most one-shot deploy commands (`vxcli deploy`, `vxcli vm`) work without it, but `vxcli apply` (terraform) and the marketplace/import flows expect a session directory.\n\nSteps:\n  1. `vxcli init` in the current directory — writes `.vxcli/session.json` with a fresh session id and the bound node URL.\n  2. `vxcli init my-workspace` — creates `./my-workspace/` and initialises it.\n  3. `vxcli init --force` — re-init an existing `.vxcli/` (use after switching nodes with `vxcli node set-default`).\n  4. Inside the session: stage code under `src/`, terraform under `terraform/`, and the CLI tracks them in `session.json`.\n  5. Then run `vxcli apply` / `vxcli import` from this directory — no `--session_id` flag needed.\n\nVerify: `cat .vxcli/session.json` shows `session_id`, `node_url`, and an empty `resources` list. `vxcli sessions list` includes this session id once you run any state-changing command.\n\nEscalate: if you see `init: legacy mode — running terraform init -reconfigure`, you accidentally ran `vxcli init terraform` (the old name) — that path is preserved for back-compat but isn't what you want for new sessions. Source: [vxcli init](internal://services/cli/cmd/init.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "vxcli doctor reports 'API endpoint unreachable' — how do I diagnose?",
+    "category": "troubleshoot",
+    "sources": [
+      {"title": "vxcli doctor", "url": "internal://services/cli/cmd/doctor.go"}
+    ],
+    "output": "Diagnosis: `doctor` runs four checks — OS info, required tools (terraform, ssh, docker), config status, and reachability of every API endpoint resolved from your config (tenant node + control plane). An `unreachable` finding usually means a stale node URL, a firewall, or the node is actually down.\n\nSteps:\n  1. Print the URL the CLI is dialing: `vxcli node current` — note the `URL` field.\n  2. Manual probe: `curl -sv https://<that-url>/api/v2/health` — should return `{\"status\":\"ok\"}` with HTTP 200.\n  3. If `curl` hangs: firewall or DNS. Try `nslookup <host>` and `nc -vz <host> 8743`.\n  4. If `curl` returns 502/503: the node is up but the upstream provisioner crashed — SSH to the VM and `systemctl status va_provisioner` (or `docker ps` if containerised).\n  5. If the URL is plain wrong (e.g. old hostname): `vxcli node refresh` re-syncs from the control plane; or `vxcli node set-default <id>` to switch.\n  6. Re-run `vxcli doctor` — the API endpoint line should flip to green.\n\nVerify: `vxcli doctor` prints `API endpoint: OK` and `vxcli sessions list` returns without 5xx.\n\nEscalate: if the node URL is correct, the host pings, but `:8743` refuses connection, the provisioner process exited. Pull `journalctl -u va_provisioner -n 200 --no-pager` from the VM for the crash reason and contact support@valtunox.com with the last 50 log lines. Source: [vxcli doctor](internal://services/cli/cmd/doctor.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "How do I change the default cloud provider for vxcli?",
+    "category": "cli",
+    "sources": [
+      {"title": "vxcli configure", "url": "internal://services/cli/cmd/configure.go"}
+    ],
+    "output": "Diagnosis: defaults are stored in `~/.valtunox/config.json` and read by every subcommand that takes `--cloud` or `--region`. Updating them avoids retyping the flag on every invocation.\n\nSteps:\n  1. View current settings: `vxcli configure list` (also: `vxcli configure` with no args).\n  2. Set a default: `vxcli configure set default_cloud aws` and `vxcli configure set default_region us-east-1`.\n  3. Read one key: `vxcli configure get default_cloud`.\n  4. Output format default: `vxcli configure set output_format json` — affects every command that supports `--output`.\n  5. Reset all keys: `vxcli configure reset` (does NOT touch credentials).\n  6. Locate the file: `vxcli configure path`.\n\nVerify: `vxcli deploy --app x --service ec2` (no `--cloud` flag) now uses the default. The output of `vxcli configure list` matches what you set.\n\nEscalate: if a value reverts on the next run, `~/.valtunox/config.json` is read-only or owned by root — fix with `chown $USER ~/.valtunox/config.json`. Source: [vxcli configure](internal://services/cli/cmd/configure.go)."
+  },
+  {
+    "task": "vxcli",
+    "prompt": "I want to script vxcli output — how do I get JSON instead of the colored text?",
+    "category": "cli",
+    "sources": [
+      {"title": "Global flags", "url": "internal://services/cli/cmd/root.go"}
+    ],
+    "output": "Diagnosis: every vxcli command honours four global flags: `--output {text|json|yaml}`, `--no-color`, `--quiet`, and `--debug`. For pipelines, combine `--output json --no-color --quiet`.\n\nSteps:\n  1. One-shot: `vxcli sessions list --output json --no-color > sessions.json`.\n  2. Persistent: `vxcli configure set output_format json` so every command defaults to JSON.\n  3. In CI, also set `--quiet` to silence informational stderr (e.g. the Redis-disabled banner).\n  4. Pipe to jq: `vxcli sessions list --output json | jq '.[] | {id: .session_id, node: .node_url}'`.\n  5. YAML form: `--output yaml` — handy when the result becomes a Kubernetes manifest input.\n\nVerify: stdout is parseable: `vxcli sessions list --output json --quiet | jq -e . >/dev/null` exits 0.\n\nEscalate: a few legacy commands (interactive `vxcli chat` TUI, `vxcli tui`) ignore `--output` because they're terminal-bound; for those, use the corresponding non-interactive command (e.g. `vxcli chat \"prompt\" --output json`). Source: vxcli root command flags."
+  }
+]
